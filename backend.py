@@ -1,6 +1,6 @@
 import csv
 CHUNK_SIZE = 50_000
-
+import os
 
 def filterByHeader(filename, outputfilename, arrayOfTargetColnames):
     with open(filename, "r", encoding="utf-8") as f:
@@ -65,7 +65,16 @@ def filterByDate(filename, outputfilename, dateColName, *args):
                 chunk.clear()
 
 
-filterByDate("test.csv", "outputdatefiltered.csv",
-             "date", "06/14/2026", "09/15/2025")
+filterByHeader("random_dataset_4000x30.csv", "temp.csv", ["Date","Revenue","Expenses","Profit", "Margin_Pct","Unit_Price","Units_Sold", "Customer_Visits"])
 
-filterByHeader("test.csv", "filterbycolname.csv", ["fname", "lname", "date"])
+filterByDate("temp.csv", "filtered4000X8.csv", "Date", "2023-01-02","2023-01-03","2023-01-04","2023-01-05","2023-01-06","2023-01-07","2023-01-08","2023-01-09","2023-01-10")
+os.remove("temp.csv")
+filterByHeader("dataset_25k.csv", "temp.csv", ["date","field_1","field_1","field_2", "field_3","field_4","field_5", "field_6"])
+filterByDate("temp.csv", "filtered25Kx6.csv", "date", "2021-01-02","2021-01-03","2021-01-04","2021-01-05","2021-01-06","2021-01-07","2021-01-08","2021-01-09","2021-01-10")
+os.remove("temp.csv")
+filterByHeader("large_dataset_60k.csv", "temp.csv", ["date","field_1","field_1","field_2", "field_3","field_4","field_5", "field_6"])
+filterByDate("temp.csv", "filtered60Kx6.csv", "date", "2020-01-02","2020-01-03","2020-01-04","2020-01-05","2020-01-06","2020-01-07","2020-01-08","2020-01-09","2020-01-10")
+os.remove("temp.csv")
+filterByHeader("large_dataset_60k.csv", "temp.csv", ["date","field_5","field_1","field_8", "field_29","field_4","field_11"])
+filterByDate("temp.csv", "filtered60Kx5.csv", "date", "2021-01-02","2021-01-03","2021-01-04","2021-01-05","2021-01-06","2021-01-07","2021-01-08","2021-01-09","2021-01-10")
+os.remove("temp.csv")
