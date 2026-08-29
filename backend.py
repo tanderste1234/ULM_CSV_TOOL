@@ -1,80 +1,214 @@
-import csv
-CHUNK_SIZE = 50_000
+from http.server import HTTPServer, HTTPStatus, BaseHTTPRequestHandler
+import threading
+import logging
+import json
+import webbrowser
 import os
+import pandas as pd
+import re
 
-def filterByHeader(filename, outputfilename, arrayOfTargetColnames):
-    with open(filename, "r", encoding="utf-8") as f:
-        # Creates the stream reader and removes all whitespace
-        reader = csv.reader(f, skipinitialspace=True)
-        header = next(reader)  # Grab the header row
-        targetIndexes = []  # initializing the indexes we want
-        targetHeaders = []  # this is ordered list of our headers
-        chunk = []  # initializing the chunk so that anything left over in the chunk can be written
-        # this loops through the header and keeps track of the index and columname
-        for index, colname in enumerate(header):
-            # if we found what we are interested in we add the index to our list of stuff we want
-            if colname in arrayOfTargetColnames:
-                targetIndexes.append(index)
-                targetHeaders.append(colname)
-        # this opens our output file with a buffer
-        with open(outputfilename, "w", newline="", encoding="utf-8", buffering=2 * 1024 * 1024) as f:
-            writer = csv.writer(f)  # create write stream
-            # writes the column names we're interested in
-            writer.writerow(targetHeaders)
-            for row in reader:  # this loops through the rows in the file being filtered
-                newRow = []
-                # this finds all the values we're looking for one by one and creates the new row to be writen
-                for index, value in enumerate(row):
-                    if index in targetIndexes:
-                        newRow.append(value)
-                chunk.append(newRow)  # this is just to keep the I/O ops down
-                if len(chunk) >= CHUNK_SIZE:  # this is where we actually write everything
-                    writer.writerows(chunk)
-                    chunk.clear()
-            if len(chunk) > 0:
-                writer.writerows(chunk)
-                chunk.clear()
+CHUNK_SIZE = 50_000
 
 
-def filterByDate(filename, outputfilename, dateColName, *args):
-    with open(filename, "r", encoding="utf-8") as f:
-        # Creates the stream reader and removes all whitespace
-        reader = csv.reader(f, skipinitialspace=True)
-        header = next(reader)  # Grab the header row
-        targetIndexes = []  # initializing the indexes we want
-        chunk = []  # initializing the chunk so that anything left over in the chunk can be written
-        # this loops through the header and keeps track of the index and columname
-        for index, colname in enumerate(header):
-            if colname == dateColName:  # if we found what we are interested in we add the index to our list of stuff we want
-                targetIndexes.append(index)
-        # this opens our output file with a buffer
-        with open(outputfilename, "w", newline="", encoding="utf-8", buffering=2 * 1024 * 1024) as f:
-            writer = csv.writer(f)  # create write stream
-            writer.writerow(header)
-            for row in reader:  # this loops through the rows in the file being filtered
-                # this finds all the values we're looking for one by one and creates the new row to be writen
-                for index, value in enumerate(row):
-                    if index in targetIndexes:
-                        if value in args:  # uses the same format as the data file
-                            chunk.append(row)
-                if len(chunk) >= CHUNK_SIZE:  # this is where we actually write everything
-                    writer.writerows(chunk)
-                    chunk.clear()
-            if len(chunk) > 0:
-                writer.writerows(chunk)
-                chunk.clear()
+def clean_header_string(header_val):
+    """Strips quotes, spaces, and UTF-8 BOM characters from column headers."""
+    if not isinstance(header_val, str):
+        header_val = str(header_val)
+    return header_val.replace('\ufeff', '').strip().strip('"').strip("'")
 
 
-filterByHeader("random_dataset_4000x30.csv", "temp.csv", ["Date","Revenue","Expenses","Profit", "Margin_Pct","Unit_Price","Units_Sold", "Customer_Visits"])
+def parse_input_list(raw_input):
+    """Converts input (list, comma-separated string, or newline-separated string) into a clean list."""
+    if isinstance(raw_input, str):
+        items = re.split(r'[,\n\r]+', raw_input)
+    elif isinstance(raw_input, list):
+        items = []
+        for item in raw_input:
+            if isinstance(item, str):
+                items.extend(re.split(r'[,\n\r]+', item))
+            else:
+                items.append(str(item))
+    else:
+        items = [str(raw_input)]
 
-filterByDate("temp.csv", "filtered4000X8.csv", "Date", "2023-01-02","2023-01-03","2023-01-04","2023-01-05","2023-01-06","2023-01-07","2023-01-08","2023-01-09","2023-01-10")
-os.remove("temp.csv")
-filterByHeader("dataset_25k.csv", "temp.csv", ["date","field_1","field_1","field_2", "field_3","field_4","field_5", "field_6"])
-filterByDate("temp.csv", "filtered25Kx6.csv", "date", "2021-01-02","2021-01-03","2021-01-04","2021-01-05","2021-01-06","2021-01-07","2021-01-08","2021-01-09","2021-01-10")
-os.remove("temp.csv")
-filterByHeader("large_dataset_60k.csv", "temp.csv", ["date","field_1","field_1","field_2", "field_3","field_4","field_5", "field_6"])
-filterByDate("temp.csv", "filtered60Kx6.csv", "date", "2020-01-02","2020-01-03","2020-01-04","2020-01-05","2020-01-06","2020-01-07","2020-01-08","2020-01-09","2020-01-10")
-os.remove("temp.csv")
-filterByHeader("large_dataset_60k.csv", "temp.csv", ["date","field_5","field_1","field_8", "field_29","field_4","field_11"])
-filterByDate("temp.csv", "filtered60Kx5.csv", "date", "2021-01-02","2021-01-03","2021-01-04","2021-01-05","2021-01-06","2021-01-07","2021-01-08","2021-01-09","2021-01-10")
-os.remove("temp.csv")
+    cleaned = []
+    for item in items:
+        val = clean_header_string(item)
+        if val:
+            cleaned.append(val)
+    return cleaned
+
+
+def execute_processing_task(payload_data):
+    input_file = payload_data.get('input_file', '')
+    output_file = payload_data.get('output_file', '')
+    date_field_name = clean_header_string(payload_data.get('date_field_name', ''))
+
+    raw_dates = payload_data.get('dates', [])
+    raw_fields = payload_data.get('fields', [])
+
+    clean_dates_list = parse_input_list(raw_dates)
+    clean_fields_list = parse_input_list(raw_fields)
+
+    # Ensure the date field is also included in the target output fields if provided
+    desired_output_fields = list(clean_fields_list)
+    if date_field_name and date_field_name not in desired_output_fields:
+        desired_output_fields.append(date_field_name)
+
+    logging.info("--- Payload Pre-processing Setup Complete ---")
+    logging.info(f"Cleaned Dates List ({len(clean_dates_list)} items): {clean_dates_list}")
+    logging.info(f"Cleaned Fields List ({len(clean_fields_list)} items): {clean_fields_list}")
+    logging.info(f"Date Filter Field Name: '{date_field_name}'")
+
+    # Clear/create the output file upfront once
+    with open(output_file, 'w', encoding='utf-8') as f:
+        pass
+
+    header_written = False
+    total_chunks = 0
+    total_rows_written = 0
+
+    # Process file in chunks
+    for chunk in pd.read_csv(input_file, chunksize=CHUNK_SIZE, dtype=str):
+        total_chunks += 1
+
+        # 1. Build dictionary mapping cleaned header -> actual raw header string in CSV
+        col_map = {clean_header_string(col): col for col in chunk.columns}
+
+        # Debug header matching on the first chunk
+        if total_chunks == 1:
+            matched = [f for f in desired_output_fields if f in col_map]
+            missing = [f for f in desired_output_fields if f not in col_map]
+            logging.info(f"Matched target fields: {matched}")
+            if missing:
+                logging.warning(f"Fields NOT found in CSV headers: {missing}")
+
+        # 2. Extract CSV columns for OUTPUT (maintaining exact left-to-right CSV order)
+        requested_csv_cols = [
+            original_col for original_col in chunk.columns
+            if clean_header_string(original_col) in desired_output_fields
+        ]
+
+        if not requested_csv_cols:
+            continue
+
+        # 3. Slice chunk data directly containing all target output columns
+        sub_df = chunk[requested_csv_cols].copy()
+
+        # 4. Filter rows vertically by date condition (if date field exists in data)
+        if date_field_name and date_field_name in col_map:
+            actual_date_col = col_map[date_field_name]
+            if actual_date_col in sub_df.columns and clean_dates_list:
+                clean_date_series = sub_df[actual_date_col].astype(str).str.strip()
+                sub_df = sub_df[clean_date_series.isin(clean_dates_list)]
+
+        # 5. Clean output header strings
+        sub_df.columns = [clean_header_string(c) for c in sub_df.columns]
+
+        # 6. Append matching rows to disk
+        if not sub_df.empty:
+            sub_df.to_csv(
+                output_file,
+                mode='a',
+                index=False,
+                header=not header_written
+            )
+            header_written = True
+            total_rows_written += len(sub_df)
+
+    logging.info("--- Processing Complete ---")
+    logging.info(f"Processed {total_chunks} chunk(s). Wrote {total_rows_written} matching row(s) to '{output_file}'.")
+
+
+def process_large_file(payload_data):
+    try:
+        execute_processing_task(payload_data)
+        logging.info("Task completed successfully.")
+    except Exception as e:
+        logging.error(f"Error executing processing task: {e}", exc_info=True)
+
+
+def open_browser():
+    html_path = os.path.abspath("index.html")
+    logging.info(f"Opening browser to: file://{html_path}")
+    webbrowser.open(f"file://{html_path}")
+
+
+def handle_request(request):
+    path = request.path
+    method = request.command
+
+    # 1. Handle OPTIONS preflight requests (CORS)
+    if method == 'OPTIONS':
+        logging.debug(f"Handling OPTIONS preflight for path: {path}")
+        request.send_response(HTTPStatus.OK)
+        request.send_header('Access-Control-Allow-Origin', '*')
+        request.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        request.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        request.end_headers()
+        return
+
+    # 2. Handle POST submissions from frontend
+    if method == 'POST' and path == '/api/submit':
+        try:
+            content_length = int(request.headers.get('Content-Length', 0))
+            post_data = request.rfile.read(content_length)
+            payload_data = json.loads(post_data.decode('utf-8'))
+
+            logging.info("Received POST /api/submit payload. Spawning worker thread...")
+
+            processing_thread = threading.Thread(
+                target=process_large_file,
+                args=(payload_data,),
+                daemon=True
+            )
+            processing_thread.start()
+
+            response_payload = json.dumps({
+                "status": "processing",
+                "message": "Background job started successfully!"
+            }).encode('utf-8')
+
+            request.send_response(HTTPStatus.ACCEPTED)
+            request.send_header('Content-Type', 'application/json')
+            request.send_header('Access-Control-Allow-Origin', '*')
+            request.end_headers()
+            request.wfile.write(response_payload)
+        except json.JSONDecodeError as e:
+            logging.error(f"Failed to decode JSON payload: {e}")
+            request.send_response(HTTPStatus.BAD_REQUEST)
+            request.end_headers()
+        except Exception as e:
+            logging.error(f"Unexpected error processing request: {e}")
+            request.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+            request.end_headers()
+    else:
+        logging.warning(f"404 Not Found - {method} {path}")
+        request.send_response(HTTPStatus.NOT_FOUND)
+        request.end_headers()
+
+
+def run_server(port=5000):
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(message)s'
+    )
+
+    BaseHTTPRequestHandler.do_OPTIONS = handle_request
+    BaseHTTPRequestHandler.do_POST = handle_request
+
+    server_address = ('', port)
+    httpd = HTTPServer(server_address, BaseHTTPRequestHandler)
+
+    logging.info(f"Server initialized on http://localhost:{port}")
+
+    threading.Thread(target=open_browser, daemon=True).start()
+
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        logging.info("Server stopped by user.")
+
+
+if __name__ == '__main__':
+    run_server(5000)
