@@ -147,11 +147,12 @@ def open_browser():
 
 
 def shutdown_server(server_instance):
-    """Waits 1 second to ensure final HTTP response reaches frontend, then halts server."""
+    """Waits 1 second to ensure final HTTP response reaches frontend, then halts server and kills CLI process."""
     time.sleep(1)
     logging.info("Shutting down server instance...")
     server_instance.shutdown()
-
+    logging.info("Exiting Python process...")
+    os._exit(0)  # Forces immediate exit of the entire Python CLI process
 
 def handle_request(request):
     path = request.path
@@ -229,7 +230,7 @@ def handle_request(request):
         request.send_response(HTTPStatus.NOT_FOUND)
         request.end_headers()
 
-
+z`
 def run_server(port=5000):
     logging.basicConfig(
         level=logging.INFO,
