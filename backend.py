@@ -229,8 +229,7 @@ def handle_request(request):
         logging.warning(f"404 Not Found - {method} {path}")
         request.send_response(HTTPStatus.NOT_FOUND)
         request.end_headers()
-
-z`
+        
 def run_server(port=5000):
     logging.basicConfig(
         level=logging.INFO,
