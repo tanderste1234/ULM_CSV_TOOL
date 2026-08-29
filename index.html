@@ -55,6 +55,37 @@
 
       <button type="submit" class="btn-submit">Submit to Backend</button>
     </form>
+    <!-- Quit Button -->
+    <button id="quitBtn" onclick="quitApp()" style="background-color: #d9534f; color: white;">
+      Quit Application
+    </button>
+    <script>
+        async function quitApp() {
+            if (!confirm("Are you sure you want to shut down the server and exit?")) {
+                return;
+            }
+
+            try {
+                await fetch('http://localhost:5000/api/quit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+            } catch (err) {
+                console.log("Server stopped or unreachable.");
+            }
+
+            // Modern browsers restrict script-closing tabs unless opened by script,
+            // so we attempt window.close() and fallback to clearing/notifying the document.
+            window.close();
+
+            document.body.innerHTML = `
+                <div style="font-family: sans-serif; text-align: center; padding-top: 50px;">
+                    <h2>Server standard shutdown complete.</h2>
+                     <p>You can safely close this browser tab.</p>
+                </div>
+            `;
+        }
+    </script>
 
     <div id="status-message"></div>
   </div>

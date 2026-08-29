@@ -6,6 +6,7 @@ import webbrowser
 import os
 import pandas as pd
 import re
+import time
 
 CHUNK_SIZE = 50_000
 
@@ -72,40 +73,51 @@ def execute_processing_task(payload_data):
     for chunk in pd.read_csv(input_file, chunksize=CHUNK_SIZE, dtype=str):
         total_chunks += 1
 
-        # 1. Build dictionary mapping cleaned header -> actual raw header string in CSV
-        col_map = {clean_header_string(col): col for col in chunk.columns}
+        # 1. Map lowercase cleaned headers -> actual CSV column header string
+        col_map_lower = {
+            clean_header_string(col).lower(): col 
+            for col in chunk.columns
+        }
+        
+        # 2. Map lowercased target fields to actual CSV header names
+        desired_fields_lower = [f.lower() for f in desired_output_fields]
 
         # Debug header matching on the first chunk
         if total_chunks == 1:
-            matched = [f for f in desired_output_fields if f in col_map]
-            missing = [f for f in desired_output_fields if f not in col_map]
-            logging.info(f"Matched target fields: {matched}")
+            all_csv_headers = [clean_header_string(c) for c in chunk.columns]
+            matched = [f for f in desired_output_fields if f.lower() in col_map_lower]
+            missing = [f for f in desired_output_fields if f.lower() not in col_map_lower]
+            
+            logging.info("================ CSV HEADER AUDIT ================")
+            logging.info(f"Actual CSV Headers Found ({len(all_csv_headers)}): {all_csv_headers[:10]}...")
+            logging.info(f"Requested Fields MATCHED: {matched}")
             if missing:
-                logging.warning(f"Fields NOT found in CSV headers: {missing}")
+                logging.warning(f"Requested Fields NOT MATCHED (Check spelling/case): {missing}")
+            logging.info("==================================================")
 
-        # 2. Extract CSV columns for OUTPUT (maintaining exact left-to-right CSV order)
+        # 3. Extract CSV columns for OUTPUT (maintaining exact left-to-right CSV order)
         requested_csv_cols = [
             original_col for original_col in chunk.columns
-            if clean_header_string(original_col) in desired_output_fields
+            if clean_header_string(original_col).lower() in desired_fields_lower
         ]
 
         if not requested_csv_cols:
             continue
 
-        # 3. Slice chunk data directly containing all target output columns
+        # 4. Slice chunk data directly containing all target output columns
         sub_df = chunk[requested_csv_cols].copy()
 
-        # 4. Filter rows vertically by date condition (if date field exists in data)
-        if date_field_name and date_field_name in col_map:
-            actual_date_col = col_map[date_field_name]
+        # 5. Filter rows vertically by date condition (if date field exists in data)
+        if date_field_name and date_field_name.lower() in col_map_lower:
+            actual_date_col = col_map_lower[date_field_name.lower()]
             if actual_date_col in sub_df.columns and clean_dates_list:
                 clean_date_series = sub_df[actual_date_col].astype(str).str.strip()
                 sub_df = sub_df[clean_date_series.isin(clean_dates_list)]
 
-        # 5. Clean output header strings
+        # 6. Clean output header strings
         sub_df.columns = [clean_header_string(c) for c in sub_df.columns]
 
-        # 6. Append matching rows to disk
+        # 7. Append matching rows to disk
         if not sub_df.empty:
             sub_df.to_csv(
                 output_file,
@@ -132,6 +144,13 @@ def open_browser():
     html_path = os.path.abspath("index.html")
     logging.info(f"Opening browser to: file://{html_path}")
     webbrowser.open(f"file://{html_path}")
+
+
+def shutdown_server(server_instance):
+    """Waits 1 second to ensure final HTTP response reaches frontend, then halts server."""
+    time.sleep(1)
+    logging.info("Shutting down server instance...")
+    server_instance.shutdown()
 
 
 def handle_request(request):
@@ -182,6 +201,29 @@ def handle_request(request):
             logging.error(f"Unexpected error processing request: {e}")
             request.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
             request.end_headers()
+
+    # 3. Handle Quit / Shutdown request
+    elif method == 'POST' and path == '/api/quit':
+        logging.info("Received POST /api/quit request. Preparing server shutdown...")
+
+        response_payload = json.dumps({
+            "status": "success",
+            "message": "Server shutting down..."
+        }).encode('utf-8')
+
+        request.send_response(HTTPStatus.OK)
+        request.send_header('Content-Type', 'application/json')
+        request.send_header('Access-Control-Allow-Origin', '*')
+        request.end_headers()
+        request.wfile.write(response_payload)
+
+        # Trigger shutdown on background thread to let request finish cleanly
+        threading.Thread(
+            target=shutdown_server,
+            args=(request.server,),
+            daemon=True
+        ).start()
+
     else:
         logging.warning(f"404 Not Found - {method} {path}")
         request.send_response(HTTPStatus.NOT_FOUND)
