@@ -1,5 +1,5 @@
 # ULM_CSV_TOOL
-the tool for ULM
+the replacement for the old query system for ULM
 ## 🛠️ Prerequisites & Setup
 
 Follow these steps to install and run the tool.
