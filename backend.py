@@ -7,6 +7,7 @@ import os
 import pandas as pd
 import re
 import time
+import sys
 
 CHUNK_SIZE = 50_000
 
@@ -140,11 +141,18 @@ def process_large_file(payload_data):
         logging.error(f"Error executing processing task: {e}", exc_info=True)
 
 
+def get_resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller bundle."""
+    if hasattr(sys, '_MEIPASS'):
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
+
+# Example usage when opening your browser:
 def open_browser():
-    html_path = os.path.abspath("index.html")
+    html_path = get_resource_path("index.html")
     logging.info(f"Opening browser to: file://{html_path}")
     webbrowser.open(f"file://{html_path}")
-
 
 def shutdown_server(server_instance):
     """Waits 1 second to ensure final HTTP response reaches frontend, then halts server and kills CLI process."""
@@ -229,7 +237,6 @@ def handle_request(request):
         logging.warning(f"404 Not Found - {method} {path}")
         request.send_response(HTTPStatus.NOT_FOUND)
         request.end_headers()
-        
 def run_server(port=5000):
     logging.basicConfig(
         level=logging.INFO,
