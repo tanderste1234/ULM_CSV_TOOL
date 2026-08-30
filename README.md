@@ -1,24 +1,14 @@
 # ULM_CSV_TOOL
-the tool for ULM
+the replacement for the old query system for ULM
 ## 🛠️ Prerequisites & Setup
 
-Follow these steps to set up Python and install the required dependencies to run the server.
+Follow these steps to install and run the tool.
+### 1. Download and Run
 
-### 1. Install Python
+1. Open the `releases` folder in this repository.
+2. Click on the `ULMCSVTOOLV1.0.exe` file.
+3. On the file preview screen, locate the group of 3 buttons in the top-right corner (the first button is labeled **Raw**).
+4. Click the 3rd button on the right (the download icon, which shows the tooltip **"Download raw file"** when you hover over it) to save the file to your computer.
+5. Double-click `ULMCSVTOOLV1.0.exe` to launch the application.
 
-1. Download the latest Python installer from the official website: [python.org/downloads](https://www.python.org/downloads/).
-2. Run the installer.
-3. **Important:** On the very first screen of the installer, check the box that says **"Add python.exe to PATH"** before clicking **Install Now**.
-
-### 2. Verify Python Installation
-
-Open **Command Prompt** or **PowerShell** on Windows and check that Python is accessible:
-
-cmd 
-```python --version```
-### 3. Install Pandas Package
-
-Run the following command in your terminal to install the `pandas` package required for high-speed CSV processing:
-
-cmd
-```python -m pip install pandas```
+> **Note:** `ULMCSVTOOLV1.0.exe` is a fully self-contained file. You do not need to install Python, run any command-line scripts, or download additional setup files—just open the file, and you are good to go!
