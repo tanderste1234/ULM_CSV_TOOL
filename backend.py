@@ -1,9 +1,11 @@
 import os
 import re
 import csv
+import calendar
 import threading
 import unicodedata
 import tkinter as tk
+from datetime import datetime
 from tkinter import filedialog, messagebox
 
 
@@ -25,20 +27,127 @@ def sanitize_text(val):
 def parse_input_list(raw_input):
     if not raw_input:
         return []
+
     if isinstance(raw_input, str):
         items = re.split(r'[\s,\t\n\r]+', raw_input.strip())
     elif isinstance(raw_input, list):
         items = []
         for item in raw_input:
             if isinstance(item, str):
-                items.extend(re.split(r'[\s,\t\n\r]+', item.strip()))
+                split_items = re.split(r'[\s,\t\n\r]+', item.strip())
+                for sub_item in split_items:
+                    items.append(sub_item)
             else:
                 items.append(str(item))
     else:
         items = [str(raw_input)]
 
-    cleaned = [sanitize_text(x) for x in items]
-    return [x for x in cleaned if x]
+    cleaned = []
+    for x in items:
+        sanitized = sanitize_text(x)
+        if sanitized:
+            cleaned.append(sanitized)
+
+    return cleaned
+
+
+def parse_year_month_to_range(month_year_str):
+    """
+    Parses inputs like '2024-01', '01/2024', '2024/01', '01-2024'
+    and returns a datetime range covering the entire month:
+    (Start of 1st day, End of last day)
+    """
+    if not month_year_str:
+        return None
+
+    cleaned = sanitize_text(month_year_str)
+
+    formats = [
+        "%Y-%m", "%m/%Y", "%Y/%m", "%m-%Y"
+    ]
+
+    dt = None
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(cleaned, fmt)
+            break
+        except ValueError:
+            pass
+
+    if not dt:
+        return None
+
+    year = dt.year
+    month = dt.month
+
+    # First day of the month at midnight
+    start_dt = datetime(year, month, 1, 0, 0, 0)
+
+    # Last day of the month at 23:59:59
+    _, last_day = calendar.monthrange(year, month)
+    end_dt = datetime(year, month, last_day, 23, 59, 59)
+
+    return start_dt, end_dt
+
+
+def parse_date_safely(date_str):
+    """Parses daily row timestamps from the CSV."""
+    if not date_str:
+        return None
+
+    cleaned = sanitize_text(date_str)
+    formats = [
+        "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d",
+        "%Y-%m-%d %H:%M:%S", "%m/%d/%Y %H:%M:%S"
+    ]
+
+    for fmt in formats:
+        try:
+            return datetime.strptime(cleaned, fmt)
+        except ValueError:
+            pass
+
+    return None
+
+
+def build_month_year_range_pairs(start_months_raw, end_months_raw):
+    """
+    Pairs start and end month/year inputs by list position and converts 
+    them to full datetime range windows.
+    """
+    start_str_list = parse_input_list(start_months_raw)
+    end_str_list = parse_input_list(end_months_raw)
+
+    parsed_ranges = []
+    max_len = max(len(start_str_list), len(end_str_list))
+
+    for i in range(max_len):
+        start_str = None
+        if i < len(start_str_list):
+            start_str = start_str_list[i]
+
+        end_str = None
+        if i < len(end_str_list):
+            end_str = end_str_list[i]
+
+        start_bounds = parse_year_month_to_range(start_str)
+        end_bounds = parse_year_month_to_range(end_str)
+
+        if start_bounds and not end_bounds:
+            end_bounds = start_bounds
+        elif end_bounds and not start_bounds:
+            start_bounds = end_bounds
+
+        if start_bounds and end_bounds:
+            range_start = start_bounds[0]
+            range_end = end_bounds[1]
+
+            if range_start > range_end:
+                range_start, range_end = end_bounds[0], start_bounds[1]
+
+            parsed_ranges.append((range_start, range_end))
+
+    return parsed_ranges
 
 
 def execute_huge_file_processing(payload_data):
@@ -46,7 +155,10 @@ def execute_huge_file_processing(payload_data):
     output_file = payload_data.get('output_file', '')
     date_field_name = sanitize_text(payload_data.get('date_field_name', ''))
 
-    clean_dates_list = parse_input_list(payload_data.get('dates', []))
+    date_ranges = build_month_year_range_pairs(
+        payload_data.get('start_dates', ''),
+        payload_data.get('end_dates', '')
+    )
     clean_fields_list = parse_input_list(payload_data.get('fields', []))
 
     out_dir = os.path.dirname(output_file)
@@ -89,9 +201,19 @@ def execute_huge_file_processing(payload_data):
         except StopIteration:
             raise ValueError("The selected input file is empty.")
 
-        clean_headers = [sanitize_text(h) for h in raw_headers]
-        headers_lower_map = {h.lower(): idx for idx,
-                             h in enumerate(clean_headers)}
+        clean_headers = []
+        for h in raw_headers:
+            clean_headers.append(sanitize_text(h))
+
+        headers_lower_map = {}
+        for idx, h in enumerate(clean_headers):
+            headers_lower_map[h.lower()] = idx
+
+        if date_field_name.lower() not in headers_lower_map:
+            raise ValueError(
+                f"Date field '{date_field_name}' not found in file headers.")
+
+        date_col_idx = headers_lower_map[date_field_name.lower()]
 
         target_indices = []
         if clean_fields_list:
@@ -100,55 +222,47 @@ def execute_huge_file_processing(payload_data):
                 if f_lower in headers_lower_map:
                     target_indices.append(headers_lower_map[f_lower])
 
-        date_col_idx = None
-        if date_field_name:
-            if date_field_name.lower() in headers_lower_map:
-                date_col_idx = headers_lower_map[date_field_name.lower()]
-                if target_indices and date_col_idx not in target_indices:
-                    target_indices.append(date_col_idx)
+        if target_indices and date_col_idx not in target_indices:
+            target_indices.append(date_col_idx)
 
         if not target_indices:
             target_indices = list(range(len(clean_headers)))
         else:
-            # Sort indices numerical order so output columns match the original file layout
-            target_indices = sorted(list(set(target_indices)))
+            unique_indices = set(target_indices)
+            target_indices = sorted(list(unique_indices))
 
-        out_headers = [clean_headers[i] for i in target_indices]
+        out_headers = []
+        for i in target_indices:
+            out_headers.append(clean_headers[i])
+
         writer.writerow(out_headers)
-
-        date_patterns = [re.compile(re.escape(d), re.IGNORECASE)
-                         for d in clean_dates_list]
 
         for row in reader:
             total_read += 1
             keep_row = True
 
-            if date_col_idx is not None and clean_dates_list:
+            if date_ranges:
                 if date_col_idx < len(row):
-                    raw_cell = row[date_col_idx]
-                    cell_val = sanitize_text(raw_cell)
-                    matched = False
-
-                    cell_val_lower = cell_val.lower()
-                    for d in clean_dates_list:
-                        target_d = d.lower()
-                        if target_d == cell_val_lower or target_d in cell_val_lower:
-                            matched = True
-                            break
-
-                    if not matched:
-                        for pattern in date_patterns:
-                            if pattern.search(cell_val):
-                                matched = True
+                    cell_date = parse_date_safely(row[date_col_idx])
+                    if cell_date:
+                        matched_range = False
+                        for start, end in date_ranges:
+                            if start <= cell_date <= end:
+                                matched_range = True
                                 break
-
-                    keep_row = matched
+                        keep_row = matched_range
+                    else:
+                        keep_row = False
                 else:
                     keep_row = False
 
             if keep_row:
-                out_row = [row[i] if i < len(
-                    row) else "" for i in target_indices]
+                out_row = []
+                for i in target_indices:
+                    if i < len(row):
+                        out_row.append(row[i])
+                    else:
+                        out_row.append("")
                 writer.writerow(out_row)
                 total_written += 1
 
@@ -163,6 +277,7 @@ class LocalApp(tk.Tk):
         main_frame = tk.Frame(self, padx=15, pady=15)
         main_frame.pack(fill="both", expand=True)
 
+        # File Inputs
         tk.Label(main_frame, text="Input CSV File:", font=(
             'Helvetica', 9, 'bold')).pack(anchor="w")
         input_frame = tk.Frame(main_frame)
@@ -181,29 +296,37 @@ class LocalApp(tk.Tk):
         tk.Button(output_frame, text="Browse...",
                   command=self.browse_output).pack(side="right")
 
+        # Configurations
         tk.Label(main_frame, text="Target Fields (leave blank to keep all):", font=(
             'Helvetica', 9, 'bold')).pack(anchor="w")
         self.fields_entry = tk.Entry(main_frame)
         self.fields_entry.pack(fill="x", pady=(2, 8))
 
-        tk.Label(main_frame, text="Date Filter Field Name (optional):",
+        tk.Label(main_frame, text="Date Filter Field Name (Required):",
                  font=('Helvetica', 9, 'bold')).pack(anchor="w")
         self.date_field_entry = tk.Entry(main_frame)
         self.date_field_entry.pack(fill="x", pady=(2, 8))
 
-        tk.Label(main_frame, text="Dates to Filter (optional):",
+        # Separate Lists for Start and End Year-Months
+        tk.Label(main_frame, text="Start Months (e.g. 2024-01, 2024-06):",
                  font=('Helvetica', 9, 'bold')).pack(anchor="w")
-        self.dates_entry = tk.Entry(main_frame)
-        self.dates_entry.pack(fill="x", pady=(2, 12))
+        self.start_dates_entry = tk.Entry(main_frame)
+        self.start_dates_entry.pack(fill="x", pady=(2, 8))
 
+        tk.Label(main_frame, text="End Months (e.g. 2024-03, 2024-08):",
+                 font=('Helvetica', 9, 'bold')).pack(anchor="w")
+        self.end_dates_entry = tk.Entry(main_frame)
+        self.end_dates_entry.pack(fill="x", pady=(2, 12))
+
+        # Submit Button
         self.run_button = tk.Button(main_frame, text="Submit", command=self.start_thread, font=(
             'Helvetica', 10, 'bold'), height=2)
         self.run_button.pack(fill="x")
 
         self.update_idletasks()
         req_height = self.winfo_reqheight()
-        self.geometry(f"540x{req_height}")
-        self.minsize(540, req_height)
+        self.geometry(f"560x{req_height}")
+        self.minsize(560, req_height)
 
     def browse_input(self):
         filename = filedialog.askopenfilename(
@@ -225,12 +348,18 @@ class LocalApp(tk.Tk):
             'output_file': self.output_entry.get().strip(),
             'date_field_name': self.date_field_entry.get().strip(),
             'fields': self.fields_entry.get().strip(),
-            'dates': self.dates_entry.get().strip()
+            'start_dates': self.start_dates_entry.get().strip(),
+            'end_dates': self.end_dates_entry.get().strip()
         }
 
         if not payload['input_file'] or not payload['output_file']:
             messagebox.showerror(
                 "Missing Information", "Please select both input and output file paths.")
+            return
+
+        if not payload['date_field_name']:
+            messagebox.showerror("Missing Information",
+                                 "Please enter the Date Filter Field Name.")
             return
 
         self.run_button.config(state="disabled", text="Processing...")
