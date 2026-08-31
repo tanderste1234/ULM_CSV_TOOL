@@ -1,263 +1,258 @@
-from http.server import HTTPServer, HTTPStatus, BaseHTTPRequestHandler
-import threading
-import logging
-import json
-import webbrowser
 import os
-import pandas as pd
 import re
-import time
-import sys
+import csv
+import threading
+import unicodedata
+import tkinter as tk
+from tkinter import filedialog, messagebox
 
-CHUNK_SIZE = 50_000
 
+def sanitize_text(val):
+    if val is None:
+        return ""
 
-def clean_header_string(header_val):
-    """Strips quotes, spaces, and UTF-8 BOM characters from column headers."""
-    if not isinstance(header_val, str):
-        header_val = str(header_val)
-    return header_val.replace('\ufeff', '').strip().strip('"').strip("'")
+    val = unicodedata.normalize('NFKD', str(val))
+    val = (
+        val.replace('\ufeff', '')
+           .replace('\x00', '')
+           .replace('\xa0', ' ')
+           .replace('\r', '')
+    )
+    val = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', val)
+    return val.strip().strip('"').strip("'").strip()
 
 
 def parse_input_list(raw_input):
-    """Converts input (list, comma-separated string, or newline-separated string) into a clean list."""
+    if not raw_input:
+        return []
     if isinstance(raw_input, str):
-        items = re.split(r'[,\n\r]+', raw_input)
+        items = re.split(r'[\s,\t\n\r]+', raw_input.strip())
     elif isinstance(raw_input, list):
         items = []
         for item in raw_input:
             if isinstance(item, str):
-                items.extend(re.split(r'[,\n\r]+', item))
+                items.extend(re.split(r'[\s,\t\n\r]+', item.strip()))
             else:
                 items.append(str(item))
     else:
         items = [str(raw_input)]
 
-    cleaned = []
-    for item in items:
-        val = clean_header_string(item)
-        if val:
-            cleaned.append(val)
-    return cleaned
+    cleaned = [sanitize_text(x) for x in items]
+    return [x for x in cleaned if x]
 
 
-def execute_processing_task(payload_data):
+def execute_huge_file_processing(payload_data):
     input_file = payload_data.get('input_file', '')
     output_file = payload_data.get('output_file', '')
-    date_field_name = clean_header_string(payload_data.get('date_field_name', ''))
+    date_field_name = sanitize_text(payload_data.get('date_field_name', ''))
 
-    raw_dates = payload_data.get('dates', [])
-    raw_fields = payload_data.get('fields', [])
+    clean_dates_list = parse_input_list(payload_data.get('dates', []))
+    clean_fields_list = parse_input_list(payload_data.get('fields', []))
 
-    clean_dates_list = parse_input_list(raw_dates)
-    clean_fields_list = parse_input_list(raw_fields)
+    out_dir = os.path.dirname(output_file)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
 
-    # Ensure the date field is also included in the target output fields if provided
-    desired_output_fields = list(clean_fields_list)
-    if date_field_name and date_field_name not in desired_output_fields:
-        desired_output_fields.append(date_field_name)
-
-    logging.info("--- Payload Pre-processing Setup Complete ---")
-    logging.info(f"Cleaned Dates List ({len(clean_dates_list)} items): {clean_dates_list}")
-    logging.info(f"Cleaned Fields List ({len(clean_fields_list)} items): {clean_fields_list}")
-    logging.info(f"Date Filter Field Name: '{date_field_name}'")
-
-    # Clear/create the output file upfront once
-    with open(output_file, 'w', encoding='utf-8') as f:
+    encoding_to_use = 'utf-8'
+    try:
+        with open(input_file, 'rb') as f_bytes:
+            head = f_bytes.read(4)
+            if head.startswith(b'\xff\xfe') or head.startswith(b'\xfe\xff'):
+                encoding_to_use = 'utf-16'
+    except Exception:
         pass
 
-    header_written = False
-    total_chunks = 0
-    total_rows_written = 0
-
-    # Process file in chunks
-    for chunk in pd.read_csv(input_file, chunksize=CHUNK_SIZE, dtype=str):
-        total_chunks += 1
-
-        # 1. Map lowercase cleaned headers -> actual CSV column header string
-        col_map_lower = {
-            clean_header_string(col).lower(): col 
-            for col in chunk.columns
-        }
-        
-        # 2. Map lowercased target fields to actual CSV header names
-        desired_fields_lower = [f.lower() for f in desired_output_fields]
-
-        # Debug header matching on the first chunk
-        if total_chunks == 1:
-            all_csv_headers = [clean_header_string(c) for c in chunk.columns]
-            matched = [f for f in desired_output_fields if f.lower() in col_map_lower]
-            missing = [f for f in desired_output_fields if f.lower() not in col_map_lower]
-            
-            logging.info("================ CSV HEADER AUDIT ================")
-            logging.info(f"Actual CSV Headers Found ({len(all_csv_headers)}): {all_csv_headers[:10]}...")
-            logging.info(f"Requested Fields MATCHED: {matched}")
-            if missing:
-                logging.warning(f"Requested Fields NOT MATCHED (Check spelling/case): {missing}")
-            logging.info("==================================================")
-
-        # 3. Extract CSV columns for OUTPUT (maintaining exact left-to-right CSV order)
-        requested_csv_cols = [
-            original_col for original_col in chunk.columns
-            if clean_header_string(original_col).lower() in desired_fields_lower
-        ]
-
-        if not requested_csv_cols:
-            continue
-
-        # 4. Slice chunk data directly containing all target output columns
-        sub_df = chunk[requested_csv_cols].copy()
-
-        # 5. Filter rows vertically by date condition (if date field exists in data)
-        if date_field_name and date_field_name.lower() in col_map_lower:
-            actual_date_col = col_map_lower[date_field_name.lower()]
-            if actual_date_col in sub_df.columns and clean_dates_list:
-                clean_date_series = sub_df[actual_date_col].astype(str).str.strip()
-                sub_df = sub_df[clean_date_series.isin(clean_dates_list)]
-
-        # 6. Clean output header strings
-        sub_df.columns = [clean_header_string(c) for c in sub_df.columns]
-
-        # 7. Append matching rows to disk
-        if not sub_df.empty:
-            sub_df.to_csv(
-                output_file,
-                mode='a',
-                index=False,
-                header=not header_written
-            )
-            header_written = True
-            total_rows_written += len(sub_df)
-
-    logging.info("--- Processing Complete ---")
-    logging.info(f"Processed {total_chunks} chunk(s). Wrote {total_rows_written} matching row(s) to '{output_file}'.")
-
-
-def process_large_file(payload_data):
+    delimiter = ','
     try:
-        execute_processing_task(payload_data)
-        logging.info("Task completed successfully.")
-    except Exception as e:
-        logging.error(f"Error executing processing task: {e}", exc_info=True)
+        with open(input_file, 'r', encoding=encoding_to_use, errors='ignore') as f_sample:
+            sample = f_sample.read(32768)
+            if '\t' in sample:
+                delimiter = '\t'
+            elif ';' in sample:
+                delimiter = ';'
+            elif '|' in sample:
+                delimiter = '|'
+    except Exception:
+        delimiter = ','
 
+    total_read = 0
+    total_written = 0
 
-def get_resource_path(relative_path):
-    """Get absolute path to resource, works for dev and for PyInstaller bundle."""
-    if hasattr(sys, '_MEIPASS'):
-        # PyInstaller creates a temp folder and stores path in _MEIPASS
-        return os.path.join(sys._MEIPASS, relative_path)
-    return os.path.join(os.path.abspath("."), relative_path)
+    with open(input_file, 'r', encoding=encoding_to_use, errors='ignore', buffering=1024*1024) as infile, \
+            open(output_file, 'w', encoding='utf-8', newline='', buffering=1024*1024) as outfile:
 
-# Example usage when opening your browser:
-def open_browser():
-    html_path = get_resource_path("index.html")
-    logging.info(f"Opening browser to: file://{html_path}")
-    webbrowser.open(f"file://{html_path}")
+        reader = csv.reader(infile, delimiter=delimiter)
+        writer = csv.writer(outfile)
 
-def shutdown_server(server_instance):
-    """Waits 1 second to ensure final HTTP response reaches frontend, then halts server and kills CLI process."""
-    time.sleep(1)
-    logging.info("Shutting down server instance...")
-    server_instance.shutdown()
-    logging.info("Exiting Python process...")
-    os._exit(0)  # Forces immediate exit of the entire Python CLI process
-
-def handle_request(request):
-    path = request.path
-    method = request.command
-
-    # 1. Handle OPTIONS preflight requests (CORS)
-    if method == 'OPTIONS':
-        logging.debug(f"Handling OPTIONS preflight for path: {path}")
-        request.send_response(HTTPStatus.OK)
-        request.send_header('Access-Control-Allow-Origin', '*')
-        request.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
-        request.send_header('Access-Control-Allow-Headers', 'Content-Type')
-        request.end_headers()
-        return
-
-    # 2. Handle POST submissions from frontend
-    if method == 'POST' and path == '/api/submit':
         try:
-            content_length = int(request.headers.get('Content-Length', 0))
-            post_data = request.rfile.read(content_length)
-            payload_data = json.loads(post_data.decode('utf-8'))
+            raw_headers = next(reader)
+        except StopIteration:
+            raise ValueError("The selected input file is empty.")
 
-            logging.info("Received POST /api/submit payload. Spawning worker thread...")
+        clean_headers = [sanitize_text(h) for h in raw_headers]
+        headers_lower_map = {h.lower(): idx for idx,
+                             h in enumerate(clean_headers)}
 
-            processing_thread = threading.Thread(
-                target=process_large_file,
-                args=(payload_data,),
-                daemon=True
-            )
-            processing_thread.start()
+        target_indices = []
+        if clean_fields_list:
+            for field in clean_fields_list:
+                f_lower = field.lower()
+                if f_lower in headers_lower_map:
+                    target_indices.append(headers_lower_map[f_lower])
 
-            response_payload = json.dumps({
-                "status": "processing",
-                "message": "Background job started successfully!"
-            }).encode('utf-8')
+        date_col_idx = None
+        if date_field_name:
+            if date_field_name.lower() in headers_lower_map:
+                date_col_idx = headers_lower_map[date_field_name.lower()]
+                if target_indices and date_col_idx not in target_indices:
+                    target_indices.append(date_col_idx)
 
-            request.send_response(HTTPStatus.ACCEPTED)
-            request.send_header('Content-Type', 'application/json')
-            request.send_header('Access-Control-Allow-Origin', '*')
-            request.end_headers()
-            request.wfile.write(response_payload)
-        except json.JSONDecodeError as e:
-            logging.error(f"Failed to decode JSON payload: {e}")
-            request.send_response(HTTPStatus.BAD_REQUEST)
-            request.end_headers()
+        if not target_indices:
+            target_indices = list(range(len(clean_headers)))
+        else:
+            # Sort indices numerical order so output columns match the original file layout
+            target_indices = sorted(list(set(target_indices)))
+
+        out_headers = [clean_headers[i] for i in target_indices]
+        writer.writerow(out_headers)
+
+        date_patterns = [re.compile(re.escape(d), re.IGNORECASE)
+                         for d in clean_dates_list]
+
+        for row in reader:
+            total_read += 1
+            keep_row = True
+
+            if date_col_idx is not None and clean_dates_list:
+                if date_col_idx < len(row):
+                    raw_cell = row[date_col_idx]
+                    cell_val = sanitize_text(raw_cell)
+                    matched = False
+
+                    cell_val_lower = cell_val.lower()
+                    for d in clean_dates_list:
+                        target_d = d.lower()
+                        if target_d == cell_val_lower or target_d in cell_val_lower:
+                            matched = True
+                            break
+
+                    if not matched:
+                        for pattern in date_patterns:
+                            if pattern.search(cell_val):
+                                matched = True
+                                break
+
+                    keep_row = matched
+                else:
+                    keep_row = False
+
+            if keep_row:
+                out_row = [row[i] if i < len(
+                    row) else "" for i in target_indices]
+                writer.writerow(out_row)
+                total_written += 1
+
+    return total_written, total_read
+
+
+class LocalApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("CSV Stream Processor")
+
+        main_frame = tk.Frame(self, padx=15, pady=15)
+        main_frame.pack(fill="both", expand=True)
+
+        tk.Label(main_frame, text="Input CSV File:", font=(
+            'Helvetica', 9, 'bold')).pack(anchor="w")
+        input_frame = tk.Frame(main_frame)
+        input_frame.pack(fill="x", pady=(2, 8))
+        self.input_entry = tk.Entry(input_frame)
+        self.input_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        tk.Button(input_frame, text="Browse...",
+                  command=self.browse_input).pack(side="right")
+
+        tk.Label(main_frame, text="Output CSV File:", font=(
+            'Helvetica', 9, 'bold')).pack(anchor="w")
+        output_frame = tk.Frame(main_frame)
+        output_frame.pack(fill="x", pady=(2, 8))
+        self.output_entry = tk.Entry(output_frame)
+        self.output_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        tk.Button(output_frame, text="Browse...",
+                  command=self.browse_output).pack(side="right")
+
+        tk.Label(main_frame, text="Target Fields (leave blank to keep all):", font=(
+            'Helvetica', 9, 'bold')).pack(anchor="w")
+        self.fields_entry = tk.Entry(main_frame)
+        self.fields_entry.pack(fill="x", pady=(2, 8))
+
+        tk.Label(main_frame, text="Date Filter Field Name (optional):",
+                 font=('Helvetica', 9, 'bold')).pack(anchor="w")
+        self.date_field_entry = tk.Entry(main_frame)
+        self.date_field_entry.pack(fill="x", pady=(2, 8))
+
+        tk.Label(main_frame, text="Dates to Filter (optional):",
+                 font=('Helvetica', 9, 'bold')).pack(anchor="w")
+        self.dates_entry = tk.Entry(main_frame)
+        self.dates_entry.pack(fill="x", pady=(2, 12))
+
+        self.run_button = tk.Button(main_frame, text="Submit", command=self.start_thread, font=(
+            'Helvetica', 10, 'bold'), height=2)
+        self.run_button.pack(fill="x")
+
+        self.update_idletasks()
+        req_height = self.winfo_reqheight()
+        self.geometry(f"540x{req_height}")
+        self.minsize(540, req_height)
+
+    def browse_input(self):
+        filename = filedialog.askopenfilename(
+            filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")])
+        if filename:
+            self.input_entry.delete(0, tk.END)
+            self.input_entry.insert(0, filename)
+
+    def browse_output(self):
+        filename = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[
+                                                ("CSV Files", "*.csv"), ("All Files", "*.*")])
+        if filename:
+            self.output_entry.delete(0, tk.END)
+            self.output_entry.insert(0, filename)
+
+    def start_thread(self):
+        payload = {
+            'input_file': self.input_entry.get().strip(),
+            'output_file': self.output_entry.get().strip(),
+            'date_field_name': self.date_field_entry.get().strip(),
+            'fields': self.fields_entry.get().strip(),
+            'dates': self.dates_entry.get().strip()
+        }
+
+        if not payload['input_file'] or not payload['output_file']:
+            messagebox.showerror(
+                "Missing Information", "Please select both input and output file paths.")
+            return
+
+        self.run_button.config(state="disabled", text="Processing...")
+
+        threading.Thread(target=self.run_process_async,
+                         args=(payload,), daemon=True).start()
+
+    def run_process_async(self, payload):
+        try:
+            written, total = execute_huge_file_processing(payload)
+            self.after(0, lambda: messagebox.showinfo("Task Complete", f"Processed {
+                       total:,} row(s).\nWrote {written:,} row(s) to:\n{payload['output_file']}"))
         except Exception as e:
-            logging.error(f"Unexpected error processing request: {e}")
-            request.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
-            request.end_headers()
+            self.after(0, lambda: messagebox.showerror(
+                "Error", f"An error occurred while processing:\n{e}"))
+        finally:
+            self.after(0, self.reset_ui)
 
-    # 3. Handle Quit / Shutdown request
-    elif method == 'POST' and path == '/api/quit':
-        logging.info("Received POST /api/quit request. Preparing server shutdown...")
-
-        response_payload = json.dumps({
-            "status": "success",
-            "message": "Server shutting down..."
-        }).encode('utf-8')
-
-        request.send_response(HTTPStatus.OK)
-        request.send_header('Content-Type', 'application/json')
-        request.send_header('Access-Control-Allow-Origin', '*')
-        request.end_headers()
-        request.wfile.write(response_payload)
-
-        # Trigger shutdown on background thread to let request finish cleanly
-        threading.Thread(
-            target=shutdown_server,
-            args=(request.server,),
-            daemon=True
-        ).start()
-
-    else:
-        logging.warning(f"404 Not Found - {method} {path}")
-        request.send_response(HTTPStatus.NOT_FOUND)
-        request.end_headers()
-def run_server(port=5000):
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s [%(levelname)s] %(message)s'
-    )
-
-    BaseHTTPRequestHandler.do_OPTIONS = handle_request
-    BaseHTTPRequestHandler.do_POST = handle_request
-
-    server_address = ('', port)
-    httpd = HTTPServer(server_address, BaseHTTPRequestHandler)
-
-    logging.info(f"Server initialized on http://localhost:{port}")
-
-    threading.Thread(target=open_browser, daemon=True).start()
-
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        logging.info("Server stopped by user.")
+    def reset_ui(self):
+        self.run_button.config(state="normal", text="Submit")
 
 
 if __name__ == '__main__':
-    run_server(5000)
+    app = LocalApp()
+    app.mainloop()
