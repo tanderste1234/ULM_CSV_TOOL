@@ -139,6 +139,8 @@ def build_month_year_range_pairs(start_months_raw, end_months_raw):
 def execute_huge_file_processing(payload_data):
     input_file = payload_data.get('input_file', '')
     output_file = payload_data.get('output_file', '')
+    has_headers = payload_data.get('has_headers', True)
+    custom_headers_raw = payload_data.get('custom_headers', '')
 
     year_field_name = sanitize_text(payload_data.get('year_field_name', ''))
     day_field_name = sanitize_text(payload_data.get('day_field_name', ''))
@@ -184,14 +186,21 @@ def execute_huge_file_processing(payload_data):
         reader = csv.reader(infile, delimiter=delimiter)
         writer = csv.writer(outfile)
 
-        try:
-            raw_headers = next(reader)
-        except StopIteration:
-            raise ValueError("The selected input file is empty.")
-
         clean_headers = []
-        for h in raw_headers:
-            clean_headers.append(sanitize_text(h))
+
+        if has_headers:
+            try:
+                raw_headers = next(reader)
+            except StopIteration:
+                raise ValueError("The selected input file is empty.")
+            for h in raw_headers:
+                clean_headers.append(sanitize_text(h))
+        else:
+            custom_list = parse_input_list(custom_headers_raw)
+            if not custom_list:
+                raise ValueError(
+                    "Custom headers must be provided when 'File contains header row' is unchecked.")
+            clean_headers = custom_list
 
         headers_lower_map = {}
         for idx, h in enumerate(clean_headers):
@@ -199,24 +208,21 @@ def execute_huge_file_processing(payload_data):
 
         if year_field_name.lower() not in headers_lower_map:
             raise ValueError(
-                f"Year field '{year_field_name}' was not found in CSV headers.")
+                f"Year field '{year_field_name}' was not found in defined headers.")
         if day_field_name.lower() not in headers_lower_map:
             raise ValueError(
-                f"Day field '{day_field_name}' was not found in CSV headers.")
+                f"Day field '{day_field_name}' was not found in defined headers.")
 
         year_col_idx = headers_lower_map[year_field_name.lower()]
         day_col_idx = headers_lower_map[day_field_name.lower()]
 
-        # Build list of lower-case target names requested by the user
         requested_targets = set()
         if clean_fields_list:
             for field in clean_fields_list:
                 requested_targets.add(field.lower())
-            # Always ensure Year and Day are included in the target set
             requested_targets.add(year_field_name.lower())
             requested_targets.add(day_field_name.lower())
 
-        # Build target_indices in the EXACT order columns appear in the input file
         target_indices = []
         for idx, header in enumerate(clean_headers):
             h_lower = header.lower()
@@ -291,6 +297,23 @@ class LocalApp(tk.Tk):
         tk.Button(output_frame, text="Browse...",
                   command=self.browse_output).pack(side="right")
 
+        # Header Mode Selection
+        self.has_headers_var = tk.BooleanVar(value=True)
+        self.headers_check = tk.Checkbutton(
+            main_frame,
+            text="File contains header row",
+            variable=self.has_headers_var,
+            command=self.toggle_header_entry,
+            font=('Helvetica', 9, 'bold')
+        )
+        self.headers_check.pack(anchor="w", pady=(2, 4))
+
+        tk.Label(main_frame, text="All Column Names (if file has NO header row):", font=(
+            'Helvetica', 9, 'bold')).pack(anchor="w")
+        self.custom_headers_entry = tk.Entry(main_frame, state="disabled")
+        self.custom_headers_entry.pack(fill="x", pady=(2, 8))
+
+        # Target Fields Selection
         tk.Label(main_frame, text="Target Fields (leave blank to keep all):", font=(
             'Helvetica', 9, 'bold')).pack(anchor="w")
         self.fields_entry = tk.Entry(main_frame)
@@ -325,6 +348,12 @@ class LocalApp(tk.Tk):
         self.geometry(f"560x{req_height}")
         self.minsize(560, req_height)
 
+    def toggle_header_entry(self):
+        if self.has_headers_var.get():
+            self.custom_headers_entry.config(state="disabled")
+        else:
+            self.custom_headers_entry.config(state="normal")
+
     def browse_input(self):
         filename = filedialog.askopenfilename(
             filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")])
@@ -343,6 +372,8 @@ class LocalApp(tk.Tk):
         payload = {
             'input_file': self.input_entry.get().strip(),
             'output_file': self.output_entry.get().strip(),
+            'has_headers': self.has_headers_var.get(),
+            'custom_headers': self.custom_headers_entry.get().strip(),
             'year_field_name': self.year_field_entry.get().strip(),
             'day_field_name': self.day_field_entry.get().strip(),
             'fields': self.fields_entry.get().strip(),
@@ -353,6 +384,11 @@ class LocalApp(tk.Tk):
         if not payload['input_file'] or not payload['output_file']:
             messagebox.showerror(
                 "Missing Information", "Please select both input and output file paths.")
+            return
+
+        if not payload['has_headers'] and not payload['custom_headers']:
+            messagebox.showerror(
+                "Missing Headers", "Please provide column names for files without headers.")
             return
 
         if not payload['year_field_name']:
