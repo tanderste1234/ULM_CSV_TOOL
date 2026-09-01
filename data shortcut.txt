@@ -1,3 +1,3 @@
-large_dataset_60k.csv
-60Kx4.csv
-date
+Ts_Uz_cov, Ts_Ux_cov,Uz_stdev
+2016-10,2016-2
+2016-11,2016-3

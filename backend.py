@@ -5,7 +5,7 @@ import calendar
 import threading
 import unicodedata
 import tkinter as tk
-from datetime import datetime
+from datetime import datetime, timedelta
 from tkinter import filedialog, messagebox
 
 
@@ -52,19 +52,11 @@ def parse_input_list(raw_input):
 
 
 def parse_year_month_to_range(month_year_str):
-    """
-    Parses inputs like '2024-01', '01/2024', '2024/01', '01-2024'
-    and returns a datetime range covering the entire month:
-    (Start of 1st day, End of last day)
-    """
     if not month_year_str:
         return None
 
     cleaned = sanitize_text(month_year_str)
-
-    formats = [
-        "%Y-%m", "%m/%Y", "%Y/%m", "%m-%Y"
-    ]
+    formats = ["%Y-%m", "%m/%Y", "%Y/%m", "%m-%Y"]
 
     dt = None
     for fmt in formats:
@@ -80,41 +72,35 @@ def parse_year_month_to_range(month_year_str):
     year = dt.year
     month = dt.month
 
-    # First day of the month at midnight
     start_dt = datetime(year, month, 1, 0, 0, 0)
-
-    # Last day of the month at 23:59:59
     _, last_day = calendar.monthrange(year, month)
     end_dt = datetime(year, month, last_day, 23, 59, 59)
 
     return start_dt, end_dt
 
 
-def parse_date_safely(date_str):
-    """Parses daily row timestamps from the CSV."""
-    if not date_str:
+def resolve_ordinal_date(year_val, day_of_year_val):
+    try:
+        year_str = sanitize_text(year_val)
+        day_str = sanitize_text(day_of_year_val)
+
+        if not year_str or not day_str:
+            return None
+
+        year = int(year_str)
+        day_of_year = int(day_str)
+
+        if day_of_year < 1 or day_of_year > 366:
+            return None
+
+        base_date = datetime(year, 1, 1)
+        return base_date + timedelta(days=day_of_year - 1)
+
+    except (ValueError, TypeError):
         return None
-
-    cleaned = sanitize_text(date_str)
-    formats = [
-        "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d",
-        "%Y-%m-%d %H:%M:%S", "%m/%d/%Y %H:%M:%S"
-    ]
-
-    for fmt in formats:
-        try:
-            return datetime.strptime(cleaned, fmt)
-        except ValueError:
-            pass
-
-    return None
 
 
 def build_month_year_range_pairs(start_months_raw, end_months_raw):
-    """
-    Pairs start and end month/year inputs by list position and converts 
-    them to full datetime range windows.
-    """
     start_str_list = parse_input_list(start_months_raw)
     end_str_list = parse_input_list(end_months_raw)
 
@@ -153,7 +139,9 @@ def build_month_year_range_pairs(start_months_raw, end_months_raw):
 def execute_huge_file_processing(payload_data):
     input_file = payload_data.get('input_file', '')
     output_file = payload_data.get('output_file', '')
-    date_field_name = sanitize_text(payload_data.get('date_field_name', ''))
+
+    year_field_name = sanitize_text(payload_data.get('year_field_name', ''))
+    day_field_name = sanitize_text(payload_data.get('day_field_name', ''))
 
     date_ranges = build_month_year_range_pairs(
         payload_data.get('start_dates', ''),
@@ -165,7 +153,7 @@ def execute_huge_file_processing(payload_data):
     if out_dir and not os.path.exists(out_dir):
         os.makedirs(out_dir, exist_ok=True)
 
-    encoding_to_use = 'utf-8'
+    encoding_to_use = 'utf-8-sig'
     try:
         with open(input_file, 'rb') as f_bytes:
             head = f_bytes.read(4)
@@ -209,27 +197,31 @@ def execute_huge_file_processing(payload_data):
         for idx, h in enumerate(clean_headers):
             headers_lower_map[h.lower()] = idx
 
-        if date_field_name.lower() not in headers_lower_map:
+        if year_field_name.lower() not in headers_lower_map:
             raise ValueError(
-                f"Date field '{date_field_name}' not found in file headers.")
+                f"Year field '{year_field_name}' was not found in CSV headers.")
+        if day_field_name.lower() not in headers_lower_map:
+            raise ValueError(
+                f"Day field '{day_field_name}' was not found in CSV headers.")
 
-        date_col_idx = headers_lower_map[date_field_name.lower()]
+        year_col_idx = headers_lower_map[year_field_name.lower()]
+        day_col_idx = headers_lower_map[day_field_name.lower()]
 
-        target_indices = []
+        # Build list of lower-case target names requested by the user
+        requested_targets = set()
         if clean_fields_list:
             for field in clean_fields_list:
-                f_lower = field.lower()
-                if f_lower in headers_lower_map:
-                    target_indices.append(headers_lower_map[f_lower])
+                requested_targets.add(field.lower())
+            # Always ensure Year and Day are included in the target set
+            requested_targets.add(year_field_name.lower())
+            requested_targets.add(day_field_name.lower())
 
-        if target_indices and date_col_idx not in target_indices:
-            target_indices.append(date_col_idx)
-
-        if not target_indices:
-            target_indices = list(range(len(clean_headers)))
-        else:
-            unique_indices = set(target_indices)
-            target_indices = sorted(list(unique_indices))
+        # Build target_indices in the EXACT order columns appear in the input file
+        target_indices = []
+        for idx, header in enumerate(clean_headers):
+            h_lower = header.lower()
+            if not requested_targets or h_lower in requested_targets:
+                target_indices.append(idx)
 
         out_headers = []
         for i in target_indices:
@@ -242,8 +234,12 @@ def execute_huge_file_processing(payload_data):
             keep_row = True
 
             if date_ranges:
-                if date_col_idx < len(row):
-                    cell_date = parse_date_safely(row[date_col_idx])
+                if year_col_idx < len(row) and day_col_idx < len(row):
+                    year_val = row[year_col_idx]
+                    day_val = row[day_col_idx]
+
+                    cell_date = resolve_ordinal_date(year_val, day_val)
+
                     if cell_date:
                         matched_range = False
                         for start, end in date_ranges:
@@ -272,12 +268,11 @@ def execute_huge_file_processing(payload_data):
 class LocalApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("CSV Stream Processor")
+        self.title("CSV Stream Processor (Ordinal Dates)")
 
         main_frame = tk.Frame(self, padx=15, pady=15)
         main_frame.pack(fill="both", expand=True)
 
-        # File Inputs
         tk.Label(main_frame, text="Input CSV File:", font=(
             'Helvetica', 9, 'bold')).pack(anchor="w")
         input_frame = tk.Frame(main_frame)
@@ -296,29 +291,31 @@ class LocalApp(tk.Tk):
         tk.Button(output_frame, text="Browse...",
                   command=self.browse_output).pack(side="right")
 
-        # Configurations
         tk.Label(main_frame, text="Target Fields (leave blank to keep all):", font=(
             'Helvetica', 9, 'bold')).pack(anchor="w")
         self.fields_entry = tk.Entry(main_frame)
         self.fields_entry.pack(fill="x", pady=(2, 8))
 
-        tk.Label(main_frame, text="Date Filter Field Name (Required):",
-                 font=('Helvetica', 9, 'bold')).pack(anchor="w")
-        self.date_field_entry = tk.Entry(main_frame)
-        self.date_field_entry.pack(fill="x", pady=(2, 8))
+        tk.Label(main_frame, text="Year Field Name in CSV (e.g. Year, YYYY):", font=(
+            'Helvetica', 9, 'bold')).pack(anchor="w")
+        self.year_field_entry = tk.Entry(main_frame)
+        self.year_field_entry.pack(fill="x", pady=(2, 8))
 
-        # Separate Lists for Start and End Year-Months
-        tk.Label(main_frame, text="Start Months (e.g. 2024-01, 2024-06):",
+        tk.Label(main_frame, text="Day Field Name in CSV (Day of Year 1-365):",
+                 font=('Helvetica', 9, 'bold')).pack(anchor="w")
+        self.day_field_entry = tk.Entry(main_frame)
+        self.day_field_entry.pack(fill="x", pady=(2, 8))
+
+        tk.Label(main_frame, text="Start Target Months (e.g. 2024-01, 2024-06):",
                  font=('Helvetica', 9, 'bold')).pack(anchor="w")
         self.start_dates_entry = tk.Entry(main_frame)
         self.start_dates_entry.pack(fill="x", pady=(2, 8))
 
-        tk.Label(main_frame, text="End Months (e.g. 2024-03, 2024-08):",
+        tk.Label(main_frame, text="End Target Months (e.g. 2024-03, 2024-08):",
                  font=('Helvetica', 9, 'bold')).pack(anchor="w")
         self.end_dates_entry = tk.Entry(main_frame)
         self.end_dates_entry.pack(fill="x", pady=(2, 12))
 
-        # Submit Button
         self.run_button = tk.Button(main_frame, text="Submit", command=self.start_thread, font=(
             'Helvetica', 10, 'bold'), height=2)
         self.run_button.pack(fill="x")
@@ -346,7 +343,8 @@ class LocalApp(tk.Tk):
         payload = {
             'input_file': self.input_entry.get().strip(),
             'output_file': self.output_entry.get().strip(),
-            'date_field_name': self.date_field_entry.get().strip(),
+            'year_field_name': self.year_field_entry.get().strip(),
+            'day_field_name': self.day_field_entry.get().strip(),
             'fields': self.fields_entry.get().strip(),
             'start_dates': self.start_dates_entry.get().strip(),
             'end_dates': self.end_dates_entry.get().strip()
@@ -357,9 +355,14 @@ class LocalApp(tk.Tk):
                 "Missing Information", "Please select both input and output file paths.")
             return
 
-        if not payload['date_field_name']:
-            messagebox.showerror("Missing Information",
-                                 "Please enter the Date Filter Field Name.")
+        if not payload['year_field_name']:
+            messagebox.showerror("Missing Field Name",
+                                 "Please specify the Year field name.")
+            return
+
+        if not payload['day_field_name']:
+            messagebox.showerror("Missing Field Name",
+                                 "Please specify the Day-of-Year field name.")
             return
 
         self.run_button.config(state="disabled", text="Processing...")
