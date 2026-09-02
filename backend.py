@@ -6,7 +6,7 @@ import threading
 import unicodedata
 import tkinter as tk
 from datetime import datetime, timedelta
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, scrolledtext
 
 
 def sanitize_text(val):
@@ -136,7 +136,11 @@ def build_month_year_range_pairs(start_months_raw, end_months_raw):
     return parsed_ranges
 
 
-def execute_huge_file_processing(payload_data):
+def execute_huge_file_processing(payload_data, logger_func=None):
+    def log(msg):
+        if logger_func:
+            logger_func(msg)
+
     input_file = payload_data.get('input_file', '')
     output_file = payload_data.get('output_file', '')
     has_headers = payload_data.get('has_headers', True)
@@ -145,15 +149,28 @@ def execute_huge_file_processing(payload_data):
     year_field_name = sanitize_text(payload_data.get('year_field_name', ''))
     day_field_name = sanitize_text(payload_data.get('day_field_name', ''))
 
+    log("Parsing target month date ranges...")
     date_ranges = build_month_year_range_pairs(
         payload_data.get('start_dates', ''),
         payload_data.get('end_dates', '')
     )
+    if date_ranges:
+        for r_start, r_end in date_ranges:
+            log(f"  Filtering Range: {r_start.strftime(
+                '%Y-%m-%d')} to {r_end.strftime('%Y-%m-%d')}")
+    else:
+        log("No valid date range filters supplied. All rows will pass date evaluation.")
+
     clean_fields_list = parse_input_list(payload_data.get('fields', []))
+    if clean_fields_list:
+        log(f"Target fields specified: {clean_fields_list}")
+    else:
+        log("No target fields specified. Retaining all available columns.")
 
     out_dir = os.path.dirname(output_file)
     if out_dir and not os.path.exists(out_dir):
         os.makedirs(out_dir, exist_ok=True)
+        log(f"Created output directory path: {out_dir}")
 
     encoding_to_use = 'utf-8-sig'
     try:
@@ -161,8 +178,10 @@ def execute_huge_file_processing(payload_data):
             head = f_bytes.read(4)
             if head.startswith(b'\xff\xfe') or head.startswith(b'\xfe\xff'):
                 encoding_to_use = 'utf-16'
-    except Exception:
-        pass
+    except Exception as e:
+        log(f"Warning during encoding inspection: {e}")
+
+    log(f"Selected file encoding: {encoding_to_use}")
 
     delimiter = ','
     try:
@@ -174,8 +193,10 @@ def execute_huge_file_processing(payload_data):
                 delimiter = ';'
             elif '|' in sample:
                 delimiter = '|'
-    except Exception:
-        delimiter = ','
+    except Exception as e:
+        log(f"Warning during delimiter auto-detection: {e}")
+
+    log(f"Detected delimiter: repr({repr(delimiter)})")
 
     total_read = 0
     total_written = 0
@@ -195,12 +216,16 @@ def execute_huge_file_processing(payload_data):
                 raise ValueError("The selected input file is empty.")
             for h in raw_headers:
                 clean_headers.append(sanitize_text(h))
+            log(f"Read header row from file ({
+                len(clean_headers)} columns): {clean_headers}")
         else:
             custom_list = parse_input_list(custom_headers_raw)
             if not custom_list:
                 raise ValueError(
                     "Custom headers must be provided when 'File contains header row' is unchecked.")
             clean_headers = custom_list
+            log(f"Using user-defined header list ({
+                len(clean_headers)} columns): {clean_headers}")
 
         headers_lower_map = {}
         for idx, h in enumerate(clean_headers):
@@ -215,6 +240,9 @@ def execute_huge_file_processing(payload_data):
 
         year_col_idx = headers_lower_map[year_field_name.lower()]
         day_col_idx = headers_lower_map[day_field_name.lower()]
+
+        log(f"Mapped Year column '{year_field_name}' to index {year_col_idx}")
+        log(f"Mapped Day column '{day_field_name}' to index {day_col_idx}")
 
         requested_targets = set()
         if clean_fields_list:
@@ -233,8 +261,13 @@ def execute_huge_file_processing(payload_data):
         for i in target_indices:
             out_headers.append(clean_headers[i])
 
+        log(f"Final output column indices (in original sequence): {
+            target_indices}")
+        log(f"Final output headers written: {out_headers}")
+
         writer.writerow(out_headers)
 
+        log("Beginning row processing loop...")
         for row in reader:
             total_read += 1
             keep_row = True
@@ -268,6 +301,12 @@ def execute_huge_file_processing(payload_data):
                 writer.writerow(out_row)
                 total_written += 1
 
+            if total_read % 250000 == 0:
+                log(f"Progress checkpoint: {total_read:,} rows read | {
+                    total_written:,} rows matched and written")
+
+    log(f"Processing completed successfully. Total read: {
+        total_read:,} | Total written: {total_written:,}")
     return total_written, total_read
 
 
@@ -276,21 +315,22 @@ class LocalApp(tk.Tk):
         super().__init__()
         self.title("CSV Stream Processor (Ordinal Dates)")
 
-        main_frame = tk.Frame(self, padx=15, pady=15)
-        main_frame.pack(fill="both", expand=True)
+        self.main_frame = tk.Frame(self, padx=15, pady=15)
+        self.main_frame.pack(fill="both", expand=True)
 
-        tk.Label(main_frame, text="Input CSV File:", font=(
-            'Helvetica', 9, 'bold')).pack(anchor="w")
-        input_frame = tk.Frame(main_frame)
+        # File Inputs
+        tk.Label(self.main_frame, text="Input CSV File:",
+                 font=('Helvetica', 9, 'bold')).pack(anchor="w")
+        input_frame = tk.Frame(self.main_frame)
         input_frame.pack(fill="x", pady=(2, 8))
         self.input_entry = tk.Entry(input_frame)
         self.input_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
         tk.Button(input_frame, text="Browse...",
                   command=self.browse_input).pack(side="right")
 
-        tk.Label(main_frame, text="Output CSV File:", font=(
-            'Helvetica', 9, 'bold')).pack(anchor="w")
-        output_frame = tk.Frame(main_frame)
+        tk.Label(self.main_frame, text="Output CSV File:",
+                 font=('Helvetica', 9, 'bold')).pack(anchor="w")
+        output_frame = tk.Frame(self.main_frame)
         output_frame.pack(fill="x", pady=(2, 8))
         self.output_entry = tk.Entry(output_frame)
         self.output_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
@@ -300,7 +340,7 @@ class LocalApp(tk.Tk):
         # Header Mode Selection
         self.has_headers_var = tk.BooleanVar(value=True)
         self.headers_check = tk.Checkbutton(
-            main_frame,
+            self.main_frame,
             text="File contains header row",
             variable=self.has_headers_var,
             command=self.toggle_header_entry,
@@ -308,45 +348,95 @@ class LocalApp(tk.Tk):
         )
         self.headers_check.pack(anchor="w", pady=(2, 4))
 
-        tk.Label(main_frame, text="All Column Names (if file has NO header row):", font=(
+        tk.Label(self.main_frame, text="All Column Names (if file has NO header row):", font=(
             'Helvetica', 9, 'bold')).pack(anchor="w")
-        self.custom_headers_entry = tk.Entry(main_frame, state="disabled")
+        self.custom_headers_entry = tk.Entry(self.main_frame, state="disabled")
         self.custom_headers_entry.pack(fill="x", pady=(2, 8))
 
         # Target Fields Selection
-        tk.Label(main_frame, text="Target Fields (leave blank to keep all):", font=(
+        tk.Label(self.main_frame, text="Target Fields (leave blank to keep all):", font=(
             'Helvetica', 9, 'bold')).pack(anchor="w")
-        self.fields_entry = tk.Entry(main_frame)
+        self.fields_entry = tk.Entry(self.main_frame)
         self.fields_entry.pack(fill="x", pady=(2, 8))
 
-        tk.Label(main_frame, text="Year Field Name in CSV (e.g. Year, YYYY):", font=(
+        tk.Label(self.main_frame, text="Year Field Name in CSV (e.g. Year, YYYY):", font=(
             'Helvetica', 9, 'bold')).pack(anchor="w")
-        self.year_field_entry = tk.Entry(main_frame)
+        self.year_field_entry = tk.Entry(self.main_frame)
         self.year_field_entry.pack(fill="x", pady=(2, 8))
 
-        tk.Label(main_frame, text="Day Field Name in CSV (Day of Year 1-365):",
+        tk.Label(self.main_frame, text="Day Field Name in CSV (Day of Year 1-365):",
                  font=('Helvetica', 9, 'bold')).pack(anchor="w")
-        self.day_field_entry = tk.Entry(main_frame)
+        self.day_field_entry = tk.Entry(self.main_frame)
         self.day_field_entry.pack(fill="x", pady=(2, 8))
 
-        tk.Label(main_frame, text="Start Target Months (e.g. 2024-01, 2024-06):",
+        # Date Filters
+        tk.Label(self.main_frame, text="Start Target Months (e.g. 2024-01, 2024-06):",
                  font=('Helvetica', 9, 'bold')).pack(anchor="w")
-        self.start_dates_entry = tk.Entry(main_frame)
+        self.start_dates_entry = tk.Entry(self.main_frame)
         self.start_dates_entry.pack(fill="x", pady=(2, 8))
 
-        tk.Label(main_frame, text="End Target Months (e.g. 2024-03, 2024-08):",
+        tk.Label(self.main_frame, text="End Target Months (e.g. 2024-03, 2024-08):",
                  font=('Helvetica', 9, 'bold')).pack(anchor="w")
-        self.end_dates_entry = tk.Entry(main_frame)
-        self.end_dates_entry.pack(fill="x", pady=(2, 12))
+        self.end_dates_entry = tk.Entry(self.main_frame)
+        self.end_dates_entry.pack(fill="x", pady=(2, 8))
 
-        self.run_button = tk.Button(main_frame, text="Submit", command=self.start_thread, font=(
+        # Debug Console Toggle Checkbox
+        self.show_debug_var = tk.BooleanVar(value=False)
+        self.debug_check = tk.Checkbutton(
+            self.main_frame,
+            text="Show Debug Console",
+            variable=self.show_debug_var,
+            command=self.toggle_debug_console,
+            font=('Helvetica', 9, 'bold')
+        )
+        self.debug_check.pack(anchor="w", pady=(2, 8))
+
+        # Collapsible Console Container Frame
+        self.console_frame = tk.Frame(self.main_frame)
+        self.console_text = scrolledtext.ScrolledText(
+            self.console_frame,
+            height=10,
+            font=('Courier', 9),
+            bg="#1e1e1e",
+            fg="#00ff00",
+            insertbackground="white"
+        )
+        self.console_text.pack(fill="both", expand=True)
+
+        # Submit Action Button
+        self.run_button = tk.Button(self.main_frame, text="Submit", command=self.start_thread, font=(
             'Helvetica', 10, 'bold'), height=2)
-        self.run_button.pack(fill="x")
+        self.run_button.pack(fill="x", pady=(4, 0))
 
         self.update_idletasks()
-        req_height = self.winfo_reqheight()
-        self.geometry(f"560x{req_height}")
-        self.minsize(560, req_height)
+        self.base_height = self.winfo_reqheight()
+        self.geometry(f"560x{self.base_height}")
+        self.minsize(560, self.base_height)
+
+    def log_to_console(self, msg):
+        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        formatted_msg = f"[{timestamp}] {msg}\n"
+        self.after(0, self._append_console_text, formatted_msg)
+
+    def _append_console_text(self, text):
+        self.console_text.config(state="normal")
+        self.console_text.insert(tk.END, text)
+        self.console_text.see(tk.END)
+
+    def toggle_debug_console(self):
+        if self.show_debug_var.get():
+            self.console_frame.pack(
+                fill="both", expand=True, pady=(2, 8), before=self.run_button)
+            self.update_idletasks()
+            new_height = self.base_height + 180
+            self.geometry(f"{self.winfo_width()}x{new_height}")
+            self.minsize(560, new_height)
+            self.log_to_console("--- Debug Console Opened ---")
+        else:
+            self.console_frame.pack_forget()
+            self.update_idletasks()
+            self.geometry(f"{self.winfo_width()}x{self.base_height}")
+            self.minsize(560, self.base_height)
 
     def toggle_header_entry(self):
         if self.has_headers_var.get():
@@ -402,16 +492,19 @@ class LocalApp(tk.Tk):
             return
 
         self.run_button.config(state="disabled", text="Processing...")
+        self.log_to_console("--- Starting Processing Task ---")
 
         threading.Thread(target=self.run_process_async,
                          args=(payload,), daemon=True).start()
 
     def run_process_async(self, payload):
         try:
-            written, total = execute_huge_file_processing(payload)
+            written, total = execute_huge_file_processing(
+                payload, logger_func=self.log_to_console)
             self.after(0, lambda: messagebox.showinfo("Task Complete", f"Processed {
                        total:,} row(s).\nWrote {written:,} row(s) to:\n{payload['output_file']}"))
         except Exception as e:
+            self.log_to_console(f"ERROR: Task aborted due to exception -> {e}")
             self.after(0, lambda: messagebox.showerror(
                 "Error", f"An error occurred while processing:\n{e}"))
         finally:
