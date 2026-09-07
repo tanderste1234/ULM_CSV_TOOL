@@ -1,519 +1,526 @@
 import os
-import re
-import csv
+import sys
 import calendar
 import threading
-import unicodedata
+import tempfile
+import shutil
 import tkinter as tk
-from datetime import datetime, timedelta
-from tkinter import filedialog, messagebox, scrolledtext
+from tkinter import ttk, filedialog, messagebox
+import pandas as pd
 
+
+# ---------------------------------------------------------------------------
+# CORE HELPER FUNCTIONS
+# ---------------------------------------------------------------------------
 
 def sanitize_text(val):
-    if val is None:
+    """Sanitize string values by stripping whitespace and extra quotes."""
+    if pd.isna(val) or val is None:
         return ""
-
-    val = unicodedata.normalize('NFKD', str(val))
-    val = (
-        val.replace('\ufeff', '')
-           .replace('\x00', '')
-           .replace('\xa0', ' ')
-           .replace('\r', '')
-    )
-    val = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', val)
-    return val.strip().strip('"').strip("'").strip()
+    s = str(val).strip()
+    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+        s = s[1:-1].strip()
+    return s
 
 
-def parse_input_list(raw_input):
-    if not raw_input:
-        return []
+def parse_date_range(start_str, end_str, mode):
+    """
+    Parses start and end date strings into strict normalized date timestamps (midnight).
+    """
+    s_str = start_str.strip() if start_str else ""
+    e_str = end_str.strip() if end_str else ""
 
-    if isinstance(raw_input, str):
-        items = re.split(r'[\s,\t\n\r]+', raw_input.strip())
-    elif isinstance(raw_input, list):
-        items = []
-        for item in raw_input:
-            if isinstance(item, str):
-                split_items = re.split(r'[\s,\t\n\r]+', item.strip())
-                for sub_item in split_items:
-                    items.append(sub_item)
-            else:
-                items.append(str(item))
-    else:
-        items = [str(raw_input)]
+    if not s_str and not e_str:
+        return None, None
 
-    cleaned = []
-    for x in items:
-        sanitized = sanitize_text(x)
-        if sanitized:
-            cleaned.append(sanitized)
+    s_dt = None
+    e_dt = None
 
-    return cleaned
+    if mode == "YYYY-MM":
+        date_format = "%Y-%m"
+        if s_str:
+            parsed = pd.to_datetime(s_str, format=date_format, errors="coerce")
+            if pd.notna(parsed):
+                s_dt = parsed.floor("D")
+        
+        if e_str:
+            parsed = pd.to_datetime(e_str, format=date_format, errors="coerce")
+            if pd.notna(parsed):
+                _, last_day = calendar.monthrange(parsed.year, parsed.month)
+                e_dt = pd.Timestamp(year=parsed.year, month=parsed.month, day=last_day).floor("D")
 
+    else:  # DD-MM-YYYY
+        date_format = "%d-%m-%Y"
+        if s_str:
+            parsed = pd.to_datetime(s_str, format=date_format, errors="coerce")
+            if pd.notna(parsed):
+                s_dt = parsed.floor("D")
+        
+        if e_str:
+            parsed = pd.to_datetime(e_str, format=date_format, errors="coerce")
+            if pd.notna(parsed):
+                e_dt = parsed.floor("D")
 
-def parse_year_month_to_range(month_year_str):
-    if not month_year_str:
-        return None
+    if s_dt is not None and pd.isna(s_dt):
+        s_dt = None
+    if e_dt is not None and pd.isna(e_dt):
+        e_dt = None
 
-    cleaned = sanitize_text(month_year_str)
-    formats = ["%Y-%m", "%m/%Y", "%Y/%m", "%m-%Y"]
+    if s_dt and e_dt and s_dt > e_dt:
+        s_dt, e_dt = e_dt, s_dt
 
-    dt = None
-    for fmt in formats:
-        try:
-            dt = datetime.strptime(cleaned, fmt)
-            break
-        except ValueError:
-            pass
-
-    if not dt:
-        return None
-
-    year = dt.year
-    month = dt.month
-
-    start_dt = datetime(year, month, 1, 0, 0, 0)
-    _, last_day = calendar.monthrange(year, month)
-    end_dt = datetime(year, month, last_day, 23, 59, 59)
-
-    return start_dt, end_dt
+    return s_dt, e_dt
 
 
-def resolve_ordinal_date(year_val, day_of_year_val):
-    try:
-        year_str = sanitize_text(year_val)
-        day_str = sanitize_text(day_of_year_val)
+# ---------------------------------------------------------------------------
+# MAIN STREAMING ENGINE
+# ---------------------------------------------------------------------------
 
-        if not year_str or not day_str:
-            return None
+def execute_huge_file_processing(
+    file_path,
+    output_path,
+    has_header,
+    custom_headers_str,
+    target_columns,
+    year_field_name,
+    day_field_name,
+    start_date_str,
+    end_date_str,
+    date_mode,
+    chunksize,
+    debug_func,
+    progress_func
+):
+    if not os.path.exists(file_path):
+        debug_func(f"ERROR: Input file does not exist: {file_path}")
+        return False
 
-        year = int(year_str)
-        day_of_year = int(day_str)
+    r_start, r_end = parse_date_range(start_date_str, end_date_str, date_mode)
+    has_date_filter = (r_start is not None) or (r_end is not None)
+    
+    columns_to_keep = []
+    if target_columns and target_columns.strip():
+        for c in target_columns.split(","):
+            if c.strip():
+                columns_to_keep.append(c.strip())
 
-        if day_of_year < 1 or day_of_year > 366:
-            return None
+    year_col = year_field_name.strip() if year_field_name else None
+    day_col = day_field_name.strip() if day_field_name else None
 
-        base_date = datetime(year, 1, 1)
-        return base_date + timedelta(days=day_of_year - 1)
+    if not year_col or not day_col:
+        debug_func("ERROR: Both Year field name and Day-of-Year field name must be specified.")
+        return False
 
-    except (ValueError, TypeError):
-        return None
-
-
-def build_month_year_range_pairs(start_months_raw, end_months_raw):
-    start_str_list = parse_input_list(start_months_raw)
-    end_str_list = parse_input_list(end_months_raw)
-
-    parsed_ranges = []
-    max_len = max(len(start_str_list), len(end_str_list))
-
-    for i in range(max_len):
-        start_str = None
-        if i < len(start_str_list):
-            start_str = start_str_list[i]
-
-        end_str = None
-        if i < len(end_str_list):
-            end_str = end_str_list[i]
-
-        start_bounds = parse_year_month_to_range(start_str)
-        end_bounds = parse_year_month_to_range(end_str)
-
-        if start_bounds and not end_bounds:
-            end_bounds = start_bounds
-        elif end_bounds and not start_bounds:
-            start_bounds = end_bounds
-
-        if start_bounds and end_bounds:
-            range_start = start_bounds[0]
-            range_end = end_bounds[1]
-
-            if range_start > range_end:
-                range_start, range_end = end_bounds[0], start_bounds[1]
-
-            parsed_ranges.append((range_start, range_end))
-
-    return parsed_ranges
-
-
-def execute_huge_file_processing(payload_data, logger_func=None):
-    def log(msg):
-        if logger_func:
-            logger_func(msg)
-
-    input_file = payload_data.get('input_file', '')
-    output_file = payload_data.get('output_file', '')
-    has_headers = payload_data.get('has_headers', True)
-    custom_headers_raw = payload_data.get('custom_headers', '')
-
-    year_field_name = sanitize_text(payload_data.get('year_field_name', ''))
-    day_field_name = sanitize_text(payload_data.get('day_field_name', ''))
-
-    log("Parsing target month date ranges...")
-    date_ranges = build_month_year_range_pairs(
-        payload_data.get('start_dates', ''),
-        payload_data.get('end_dates', '')
-    )
-    if date_ranges:
-        for r_start, r_end in date_ranges:
-            log(f"  Filtering Range: {r_start.strftime(
-                '%Y-%m-%d')} to {r_end.strftime('%Y-%m-%d')}")
-    else:
-        log("No valid date range filters supplied. All rows will pass date evaluation.")
-
-    clean_fields_list = parse_input_list(payload_data.get('fields', []))
-    if clean_fields_list:
-        log(f"Target fields specified: {clean_fields_list}")
-    else:
-        log("No target fields specified. Retaining all available columns.")
-
-    out_dir = os.path.dirname(output_file)
-    if out_dir and not os.path.exists(out_dir):
-        os.makedirs(out_dir, exist_ok=True)
-        log(f"Created output directory path: {out_dir}")
-
-    encoding_to_use = 'utf-8-sig'
-    try:
-        with open(input_file, 'rb') as f_bytes:
-            head = f_bytes.read(4)
-            if head.startswith(b'\xff\xfe') or head.startswith(b'\xfe\xff'):
-                encoding_to_use = 'utf-16'
-    except Exception as e:
-        log(f"Warning during encoding inspection: {e}")
-
-    log(f"Selected file encoding: {encoding_to_use}")
-
-    delimiter = ','
-    try:
-        with open(input_file, 'r', encoding=encoding_to_use, errors='ignore') as f_sample:
-            sample = f_sample.read(32768)
-            if '\t' in sample:
-                delimiter = '\t'
-            elif ';' in sample:
-                delimiter = ';'
-            elif '|' in sample:
-                delimiter = '|'
-    except Exception as e:
-        log(f"Warning during delimiter auto-detection: {e}")
-
-    log(f"Detected delimiter: repr({repr(delimiter)})")
-
-    total_read = 0
-    total_written = 0
-
-    with open(input_file, 'r', encoding=encoding_to_use, errors='ignore', buffering=1024*1024) as infile, \
-            open(output_file, 'w', encoding='utf-8', newline='', buffering=1024*1024) as outfile:
-
-        reader = csv.reader(infile, delimiter=delimiter)
-        writer = csv.writer(outfile)
-
-        clean_headers = []
-
-        if has_headers:
-            try:
-                raw_headers = next(reader)
-            except StopIteration:
-                raise ValueError("The selected input file is empty.")
-            for h in raw_headers:
-                clean_headers.append(sanitize_text(h))
-            log(f"Read header row from file ({
-                len(clean_headers)} columns): {clean_headers}")
+    custom_names = None
+    if not has_header:
+        if custom_headers_str and custom_headers_str.strip():
+            custom_names = [c.strip() for c in custom_headers_str.split(",") if c.strip()]
         else:
-            custom_list = parse_input_list(custom_headers_raw)
-            if not custom_list:
-                raise ValueError(
-                    "Custom headers must be provided when 'File contains header row' is unchecked.")
-            clean_headers = custom_list
-            log(f"Using user-defined header list ({
-                len(clean_headers)} columns): {clean_headers}")
+            debug_func("ERROR: 'CSV has no header row' was selected, but no custom headers were provided.")
+            return False
 
-        headers_lower_map = {}
-        for idx, h in enumerate(clean_headers):
-            headers_lower_map[h.lower()] = idx
+    total_rows_processed = 0
+    total_rows_written = 0
+    write_header = True
 
-        if year_field_name.lower() not in headers_lower_map:
-            raise ValueError(
-                f"Year field '{year_field_name}' was not found in defined headers.")
-        if day_field_name.lower() not in headers_lower_map:
-            raise ValueError(
-                f"Day field '{day_field_name}' was not found in defined headers.")
+    try:
+        debug_func("Starting CSV processing stream...")
 
-        year_col_idx = headers_lower_map[year_field_name.lower()]
-        day_col_idx = headers_lower_map[day_field_name.lower()]
-
-        log(f"Mapped Year column '{year_field_name}' to index {year_col_idx}")
-        log(f"Mapped Day column '{day_field_name}' to index {day_col_idx}")
-
-        requested_targets = set()
-        if clean_fields_list:
-            for field in clean_fields_list:
-                requested_targets.add(field.lower())
-            requested_targets.add(year_field_name.lower())
-            requested_targets.add(day_field_name.lower())
-
-        target_indices = []
-        for idx, header in enumerate(clean_headers):
-            h_lower = header.lower()
-            if not requested_targets or h_lower in requested_targets:
-                target_indices.append(idx)
-
-        out_headers = []
-        for i in target_indices:
-            out_headers.append(clean_headers[i])
-
-        log(f"Final output column indices (in original sequence): {
-            target_indices}")
-        log(f"Final output headers written: {out_headers}")
-
-        writer.writerow(out_headers)
-
-        log("Beginning row processing loop...")
-        for row in reader:
-            total_read += 1
-            keep_row = True
-
-            if date_ranges:
-                if year_col_idx < len(row) and day_col_idx < len(row):
-                    year_val = row[year_col_idx]
-                    day_val = row[day_col_idx]
-
-                    cell_date = resolve_ordinal_date(year_val, day_val)
-
-                    if cell_date:
-                        matched_range = False
-                        for start, end in date_ranges:
-                            if start <= cell_date <= end:
-                                matched_range = True
-                                break
-                        keep_row = matched_range
-                    else:
-                        keep_row = False
-                else:
-                    keep_row = False
-
-            if keep_row:
-                out_row = []
-                for i in target_indices:
-                    if i < len(row):
-                        out_row.append(row[i])
-                    else:
-                        out_row.append("")
-                writer.writerow(out_row)
-                total_written += 1
-
-            if total_read % 250000 == 0:
-                log(f"Progress checkpoint: {total_read:,} rows read | {
-                    total_written:,} rows matched and written")
-
-    log(f"Processing completed successfully. Total read: {
-        total_read:,} | Total written: {total_written:,}")
-    return total_written, total_read
-
-
-class LocalApp(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.title("CSV Stream Processor (Ordinal Dates)")
-
-        self.main_frame = tk.Frame(self, padx=15, pady=15)
-        self.main_frame.pack(fill="both", expand=True)
-
-        # File Inputs
-        tk.Label(self.main_frame, text="Input CSV File:",
-                 font=('Helvetica', 9, 'bold')).pack(anchor="w")
-        input_frame = tk.Frame(self.main_frame)
-        input_frame.pack(fill="x", pady=(2, 8))
-        self.input_entry = tk.Entry(input_frame)
-        self.input_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
-        tk.Button(input_frame, text="Browse...",
-                  command=self.browse_input).pack(side="right")
-
-        tk.Label(self.main_frame, text="Output CSV File:",
-                 font=('Helvetica', 9, 'bold')).pack(anchor="w")
-        output_frame = tk.Frame(self.main_frame)
-        output_frame.pack(fill="x", pady=(2, 8))
-        self.output_entry = tk.Entry(output_frame)
-        self.output_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
-        tk.Button(output_frame, text="Browse...",
-                  command=self.browse_output).pack(side="right")
-
-        # Header Mode Selection
-        self.has_headers_var = tk.BooleanVar(value=True)
-        self.headers_check = tk.Checkbutton(
-            self.main_frame,
-            text="File contains header row",
-            variable=self.has_headers_var,
-            command=self.toggle_header_entry,
-            font=('Helvetica', 9, 'bold')
-        )
-        self.headers_check.pack(anchor="w", pady=(2, 4))
-
-        tk.Label(self.main_frame, text="All Column Names (if file has NO header row):", font=(
-            'Helvetica', 9, 'bold')).pack(anchor="w")
-        self.custom_headers_entry = tk.Entry(self.main_frame, state="disabled")
-        self.custom_headers_entry.pack(fill="x", pady=(2, 8))
-
-        # Target Fields Selection
-        tk.Label(self.main_frame, text="Target Fields (leave blank to keep all):", font=(
-            'Helvetica', 9, 'bold')).pack(anchor="w")
-        self.fields_entry = tk.Entry(self.main_frame)
-        self.fields_entry.pack(fill="x", pady=(2, 8))
-
-        tk.Label(self.main_frame, text="Year Field Name in CSV (e.g. Year, YYYY):", font=(
-            'Helvetica', 9, 'bold')).pack(anchor="w")
-        self.year_field_entry = tk.Entry(self.main_frame)
-        self.year_field_entry.pack(fill="x", pady=(2, 8))
-
-        tk.Label(self.main_frame, text="Day Field Name in CSV (Day of Year 1-365):",
-                 font=('Helvetica', 9, 'bold')).pack(anchor="w")
-        self.day_field_entry = tk.Entry(self.main_frame)
-        self.day_field_entry.pack(fill="x", pady=(2, 8))
-
-        # Date Filters
-        tk.Label(self.main_frame, text="Start Target Months (e.g. 2024-01, 2024-06):",
-                 font=('Helvetica', 9, 'bold')).pack(anchor="w")
-        self.start_dates_entry = tk.Entry(self.main_frame)
-        self.start_dates_entry.pack(fill="x", pady=(2, 8))
-
-        tk.Label(self.main_frame, text="End Target Months (e.g. 2024-03, 2024-08):",
-                 font=('Helvetica', 9, 'bold')).pack(anchor="w")
-        self.end_dates_entry = tk.Entry(self.main_frame)
-        self.end_dates_entry.pack(fill="x", pady=(2, 8))
-
-        # Debug Console Toggle Checkbox
-        self.show_debug_var = tk.BooleanVar(value=False)
-        self.debug_check = tk.Checkbutton(
-            self.main_frame,
-            text="Show Debug Console",
-            variable=self.show_debug_var,
-            command=self.toggle_debug_console,
-            font=('Helvetica', 9, 'bold')
-        )
-        self.debug_check.pack(anchor="w", pady=(2, 8))
-
-        # Collapsible Console Container Frame
-        self.console_frame = tk.Frame(self.main_frame)
-        self.console_text = scrolledtext.ScrolledText(
-            self.console_frame,
-            height=10,
-            font=('Courier', 9),
-            bg="#1e1e1e",
-            fg="#00ff00",
-            insertbackground="white"
-        )
-        self.console_text.pack(fill="both", expand=True)
-
-        # Submit Action Button
-        self.run_button = tk.Button(self.main_frame, text="Submit", command=self.start_thread, font=(
-            'Helvetica', 10, 'bold'), height=2)
-        self.run_button.pack(fill="x", pady=(4, 0))
-
-        self.update_idletasks()
-        self.base_height = self.winfo_reqheight()
-        self.geometry(f"560x{self.base_height}")
-        self.minsize(560, self.base_height)
-
-    def log_to_console(self, msg):
-        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        formatted_msg = f"[{timestamp}] {msg}\n"
-        self.after(0, self._append_console_text, formatted_msg)
-
-    def _append_console_text(self, text):
-        self.console_text.config(state="normal")
-        self.console_text.insert(tk.END, text)
-        self.console_text.see(tk.END)
-
-    def toggle_debug_console(self):
-        if self.show_debug_var.get():
-            self.console_frame.pack(
-                fill="both", expand=True, pady=(2, 8), before=self.run_button)
-            self.update_idletasks()
-            new_height = self.base_height + 180
-            self.geometry(f"{self.winfo_width()}x{new_height}")
-            self.minsize(560, new_height)
-            self.log_to_console("--- Debug Console Opened ---")
-        else:
-            self.console_frame.pack_forget()
-            self.update_idletasks()
-            self.geometry(f"{self.winfo_width()}x{self.base_height}")
-            self.minsize(560, self.base_height)
-
-    def toggle_header_entry(self):
-        if self.has_headers_var.get():
-            self.custom_headers_entry.config(state="disabled")
-        else:
-            self.custom_headers_entry.config(state="normal")
-
-    def browse_input(self):
-        filename = filedialog.askopenfilename(
-            filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")])
-        if filename:
-            self.input_entry.delete(0, tk.END)
-            self.input_entry.insert(0, filename)
-
-    def browse_output(self):
-        filename = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[
-                                                ("CSV Files", "*.csv"), ("All Files", "*.*")])
-        if filename:
-            self.output_entry.delete(0, tk.END)
-            self.output_entry.insert(0, filename)
-
-    def start_thread(self):
-        payload = {
-            'input_file': self.input_entry.get().strip(),
-            'output_file': self.output_entry.get().strip(),
-            'has_headers': self.has_headers_var.get(),
-            'custom_headers': self.custom_headers_entry.get().strip(),
-            'year_field_name': self.year_field_entry.get().strip(),
-            'day_field_name': self.day_field_entry.get().strip(),
-            'fields': self.fields_entry.get().strip(),
-            'start_dates': self.start_dates_entry.get().strip(),
-            'end_dates': self.end_dates_entry.get().strip()
+        read_kwargs = {
+            "chunksize": chunksize,
+            "dtype": str,
+            "low_memory": False,
+            "on_bad_lines": "skip"
         }
 
-        if not payload['input_file'] or not payload['output_file']:
-            messagebox.showerror(
-                "Missing Information", "Please select both input and output file paths.")
-            return
+        if not has_header:
+            read_kwargs["header"] = None
+            read_kwargs["names"] = custom_names
+        else:
+            read_kwargs["header"] = 0
 
-        if not payload['has_headers'] and not payload['custom_headers']:
-            messagebox.showerror(
-                "Missing Headers", "Please provide column names for files without headers.")
-            return
+        # Context manager ensures file handle is closed promptly
+        with pd.read_csv(file_path, **read_kwargs) as reader:
+            for chunk_idx, chunk in enumerate(reader):
+                total_rows_processed += len(chunk)
 
-        if not payload['year_field_name']:
-            messagebox.showerror("Missing Field Name",
-                                 "Please specify the Year field name.")
-            return
+                # Clean all column names in the chunk to prevent silent whitespace mismatches
+                chunk.columns = [str(c).strip() for c in chunk.columns]
 
-        if not payload['day_field_name']:
-            messagebox.showerror("Missing Field Name",
-                                 "Please specify the Day-of-Year field name.")
-            return
+                parsed_dates = pd.Series(index=chunk.index, dtype="datetime64[ns]")
 
-        self.run_button.config(state="disabled", text="Processing...")
-        self.log_to_console("--- Starting Processing Task ---")
+                col_missing = False
+                if year_col not in chunk.columns:
+                    if chunk_idx == 0:
+                        debug_func(f"ERROR: Year column '{year_col}' NOT found in CSV columns: {chunk.columns.tolist()}")
+                    col_missing = True
+                
+                if day_col not in chunk.columns:
+                    if chunk_idx == 0:
+                        debug_func(f"ERROR: Day column '{day_col}' NOT found in CSV columns: {chunk.columns.tolist()}")
+                    col_missing = True
 
-        threading.Thread(target=self.run_process_async,
-                         args=(payload,), daemon=True).start()
+                if not col_missing:
+                    clean_yr = chunk[year_col].apply(sanitize_text)
+                    clean_day = chunk[day_col].apply(sanitize_text)
 
-    def run_process_async(self, payload):
-        try:
-            written, total = execute_huge_file_processing(
-                payload, logger_func=self.log_to_console)
-            self.after(0, lambda: messagebox.showinfo("Task Complete", f"Processed {
-                       total:,} row(s).\nWrote {written:,} row(s) to:\n{payload['output_file']}"))
-        except Exception as e:
-            self.log_to_console(f"ERROR: Task aborted due to exception -> {e}")
-            self.after(0, lambda: messagebox.showerror(
-                "Error", f"An error occurred while processing:\n{e}"))
-        finally:
-            self.after(0, self.reset_ui)
+                    yr_num = pd.to_numeric(clean_yr, errors="coerce")
+                    day_num = pd.to_numeric(clean_day, errors="coerce")
 
-    def reset_ui(self):
-        self.run_button.config(state="normal", text="Submit")
+                    valid_mask = yr_num.notna() & day_num.notna() & (day_num >= 1) & (day_num <= 366)
+
+                    if valid_mask.any():
+                        yr_str = yr_num[valid_mask].astype(int).astype(str)
+                        day_str = day_num[valid_mask].astype(int).astype(str).str.zfill(3)
+                        
+                        date_strings = yr_str + " " + day_str
+                        parsed_dates.loc[valid_mask] = pd.to_datetime(date_strings, format="%Y %j", errors="coerce").dt.floor("D")
+
+                # Always explicitly insert/assign the 'date' column
+                chunk.insert(0, "date", parsed_dates.dt.strftime("%d-%m-%Y"))
+
+                if chunk_idx == 0:
+                    debug_func("--- CHUNK 0 DIAGNOSTICS ---")
+                    debug_func(f"CSV Columns Found: {chunk.columns.tolist()}")
+                    debug_func(f"Target Year Col: '{year_col}' | Target Day Col: '{day_col}'")
+                    debug_func(f"Filter Mode: {date_mode} | Range: Start={r_start} | End={r_end}")
+                    
+                    if year_col in chunk.columns and day_col in chunk.columns:
+                        debug_func(f"Raw Year Sample: {chunk[year_col].head(3).tolist()}")
+                        debug_func(f"Raw Day Sample:  {chunk[day_col].head(3).tolist()}")
+                        debug_func(f"Valid Dates Parsed: {parsed_dates.notna().sum()} / {len(chunk)}")
+                        if parsed_dates.notna().sum() > 0:
+                            debug_func(f"Parsed Sample Dates: {chunk['date'].dropna().head(3).tolist()}")
+
+                # Evaluate filter boundaries strictly against date-only floor timestamps
+                if has_date_filter:
+                    match_mask = pd.Series(True, index=chunk.index)
+                    if r_start is not None:
+                        match_mask = match_mask & (parsed_dates >= r_start)
+                    if r_end is not None:
+                        match_mask = match_mask & (parsed_dates <= r_end)
+
+                    filtered_chunk = chunk[match_mask].copy()
+                else:
+                    filtered_chunk = chunk.copy()
+
+                # Ensure 'date' column is preserved regardless of user column selection
+                if columns_to_keep:
+                    existing_cols = [c for c in columns_to_keep if c in filtered_chunk.columns]
+                    if "date" not in existing_cols:
+                        existing_cols.insert(0, "date")
+                    filtered_chunk = filtered_chunk[existing_cols]
+
+                # Output writing: write header once, then continuously append
+                if not filtered_chunk.empty:
+                    filtered_chunk.to_csv(
+                        output_path,
+                        mode="w" if write_header else "a",
+                        header=write_header,
+                        index=False
+                    )
+                    write_header = False
+                    total_rows_written += len(filtered_chunk)
+
+                progress_func(total_rows_processed, total_rows_written)
+
+        if total_rows_written == 0:
+            debug_func("WARN: Processing finished, but 0 rows matched your criteria.")
+        else:
+            debug_func(f"SUCCESS: Written {total_rows_written:,} / {total_rows_processed:,} rows to {output_path}")
+
+        return True
+
+    except Exception as e:
+        debug_func(f"EXCEPTION: {str(e)}")
+        return False
 
 
-if __name__ == '__main__':
-    app = LocalApp()
-    app.mainloop()
+# ---------------------------------------------------------------------------
+# PROCEDURAL UI EVENT HANDLERS & HELPERS
+# ---------------------------------------------------------------------------
+
+def debug_log(message):
+    debug_text.insert(tk.END, message + "\n")
+    debug_text.see(tk.END)
+
+
+def update_progress(processed, written):
+    status_label.config(text=f"Processed: {processed:,} rows | Written: {written:,} rows")
+
+
+def update_date_labels():
+    mode = date_mode_var.get()
+    start_label.config(text=f"Start Date ({mode}):")
+    end_label.config(text=f"End Date ({mode}):")
+
+
+def browse_input():
+    path = filedialog.askopenfilename(filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")])
+    if path:
+        input_entry.delete(0, tk.END)
+        input_entry.insert(0, path)
+
+        if not output_entry.get().strip():
+            base, ext = os.path.splitext(path)
+            suggested_output = f"{base}_processed{ext}"
+            output_entry.delete(0, tk.END)
+            output_entry.insert(0, suggested_output)
+
+        if not no_header_var.get():
+            load_headers()
+
+
+def browse_output():
+    path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")])
+    if path:
+        output_entry.delete(0, tk.END)
+        output_entry.insert(0, path)
+    else:
+        debug_log("Save dialog canceled by user. Output path unchanged.")
+
+
+def toggle_header_mode():
+    if no_header_var.get():
+        inspect_btn.config(state=tk.DISABLED)
+        header_status_label.config(text="Manual header entry active.")
+    else:
+        inspect_btn.config(state=tk.NORMAL)
+        header_status_label.config(text="No file inspected.")
+
+
+def load_headers():
+    input_path = input_entry.get().strip()
+    if not input_path or not os.path.exists(input_path):
+        messagebox.showwarning("Warning", "Please select a valid input CSV file first.")
+        return
+
+    try:
+        df_head = pd.read_csv(input_path, nrows=0)
+        headers = [str(c).strip() for c in df_head.columns]
+        
+        custom_headers_entry.delete(0, tk.END)
+        custom_headers_entry.insert(0, ", ".join(headers))
+
+        header_status_label.config(text=f"Loaded {len(headers)} columns from file.")
+        debug_log(f"Inspected CSV Headers: {headers}")
+    except Exception as e:
+        messagebox.showerror("Header Error", f"Could not read headers: {str(e)}")
+
+
+def toggle_debug_window():
+    global debug_visible
+    if not debug_visible:
+        root.geometry("750x740")
+        debug_frame.pack(fill=tk.BOTH, expand=True, pady=4)
+        debug_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        debug_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        debug_toggle_btn.config(text="Hide Debug Window")
+        debug_visible = True
+    else:
+        debug_frame.pack_forget()
+        root.geometry("750x520")
+        debug_toggle_btn.config(text="Show Debug Window")
+        debug_visible = False
+
+
+def start_processing():
+    input_file = input_entry.get().strip()
+    output_file = output_entry.get().strip()
+
+    if not input_file or not output_file:
+        messagebox.showerror("Error", "Please specify both Input and Output CSV paths.")
+        return
+
+    abs_input = os.path.realpath(os.path.abspath(input_file))
+    abs_output = os.path.realpath(os.path.abspath(output_file))
+
+    if os.path.isdir(abs_output):
+        messagebox.showerror("Error", "Output path is a directory, not a file.")
+        return
+
+    if abs_input == abs_output:
+        messagebox.showerror(
+            "Path Error", 
+            "Output file path cannot be identical to the Input file path!\n\n"
+            "Please select a different file name or destination for the Output CSV."
+        )
+        return
+
+    run_button.config(state=tk.DISABLED)
+    debug_text.delete(1.0, tk.END)
+    debug_log("Starting job execution...")
+
+    threading.Thread(
+        target=run_job_thread,
+        args=(abs_input, abs_output),
+        daemon=True
+    ).start()
+
+
+def run_job_thread(input_file, output_file):
+    has_header = not no_header_var.get()
+
+    output_dir = os.path.dirname(output_file)
+    
+    # Use NamedTemporaryFile and explicitly close handle before passing to writer
+    temp_file = tempfile.NamedTemporaryFile(dir=output_dir if output_dir else None, suffix=".tmp", delete=False)
+    temp_path = temp_file.name
+    temp_file.close()
+
+    debug_log(f"Streaming data safely to temporary buffer: {temp_path}")
+
+    success = execute_huge_file_processing(
+        file_path=input_file,
+        output_path=temp_path,
+        has_header=has_header,
+        custom_headers_str=custom_headers_entry.get(),
+        target_columns=cols_entry.get(),
+        year_field_name=year_col_entry.get(),
+        day_field_name=day_col_entry.get(),
+        start_date_str=start_date_entry.get(),
+        end_date_str=end_date_entry.get(),
+        date_mode=date_mode_var.get(),
+        chunksize=100000,
+        debug_func=debug_log,
+        progress_func=update_progress
+    )
+
+    if success:
+        if os.path.exists(output_file):
+            os.remove(output_file)
+        shutil.move(temp_path, output_file)
+
+        status_label.config(text="Status: Completed Successfully")
+        debug_log(f"Final output written to: {output_file}")
+        messagebox.showinfo("Success", "File processing complete!")
+    else:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        status_label.config(text="Status: Failed")
+        messagebox.showerror("Error", "Processing encountered an error. Check debug logs.")
+
+    run_button.config(state=tk.NORMAL)
+
+
+# ---------------------------------------------------------------------------
+# APPLICATION INITIALIZATION & LAYOUT
+# ---------------------------------------------------------------------------
+
+root = tk.Tk()
+root.title("ULM CSV Tool v1.0")
+root.geometry("750x520")
+root.minsize(650, 520)
+
+debug_visible = False
+
+main_frame = ttk.Frame(root, padding="8")
+main_frame.pack(fill=tk.BOTH, expand=True)
+
+# 1. File Options
+file_frame = ttk.LabelFrame(main_frame, text="File Options", padding="6")
+file_frame.pack(fill=tk.X, pady=2)
+
+ttk.Label(file_frame, text="Input CSV:").grid(row=0, column=0, sticky=tk.W, pady=1)
+input_entry = ttk.Entry(file_frame, width=50)
+input_entry.grid(row=0, column=1, padx=5, pady=1, sticky=tk.EW)
+ttk.Button(file_frame, text="Browse...", command=browse_input).grid(row=0, column=2, pady=1)
+
+ttk.Label(file_frame, text="Output CSV:").grid(row=1, column=0, sticky=tk.W, pady=1)
+output_entry = ttk.Entry(file_frame, width=50)
+output_entry.grid(row=1, column=1, padx=5, pady=1, sticky=tk.EW)
+ttk.Button(file_frame, text="Browse...", command=browse_output).grid(row=1, column=2, pady=1)
+
+file_frame.columnconfigure(1, weight=1)
+
+# 2. Header Configuration
+header_frame = ttk.LabelFrame(main_frame, text="Header Configuration", padding="6")
+header_frame.pack(fill=tk.X, pady=2)
+
+no_header_var = tk.BooleanVar(value=False)
+no_header_check = ttk.Checkbutton(
+    header_frame, 
+    text="CSV has no header row (manually define below)", 
+    variable=no_header_var,
+    command=toggle_header_mode
+)
+no_header_check.pack(anchor=tk.W, pady=1)
+
+ttk.Label(header_frame, text="Manual / Defined Headers (comma-separated):").pack(anchor=tk.W, pady=(1, 1))
+custom_headers_entry = ttk.Entry(header_frame, width=70)
+custom_headers_entry.pack(fill=tk.X, pady=1)
+
+header_btn_frame = ttk.Frame(header_frame)
+header_btn_frame.pack(fill=tk.X, pady=2)
+
+inspect_btn = ttk.Button(header_btn_frame, text="Inspect CSV Headers", command=load_headers)
+inspect_btn.pack(side=tk.LEFT, padx=2)
+
+header_status_label = ttk.Label(header_btn_frame, text="No file inspected.")
+header_status_label.pack(side=tk.LEFT, padx=5)
+
+# 3. Filtering Settings
+config_frame = ttk.LabelFrame(main_frame, text="Filtering & Column Settings", padding="6")
+config_frame.pack(fill=tk.X, pady=2)
+
+ttk.Label(config_frame, text="Columns to Keep (comma-separated):").grid(row=0, column=0, sticky=tk.W, pady=1)
+cols_entry = ttk.Entry(config_frame, width=50)
+cols_entry.grid(row=0, column=1, columnspan=2, padx=5, pady=1, sticky=tk.EW)
+
+ttk.Label(config_frame, text="Year Column Name:").grid(row=1, column=0, sticky=tk.W, pady=1)
+year_col_entry = ttk.Entry(config_frame, width=30)
+year_col_entry.grid(row=1, column=1, padx=5, pady=1, sticky=tk.W)
+
+ttk.Label(config_frame, text="Day of Year Column Name (1-365):").grid(row=2, column=0, sticky=tk.W, pady=1)
+day_col_entry = ttk.Entry(config_frame, width=30)
+day_col_entry.grid(row=2, column=1, padx=5, pady=1, sticky=tk.W)
+
+# Date Format Toggle Radio Buttons
+ttk.Label(config_frame, text="Date Format Selection:").grid(row=3, column=0, sticky=tk.W, pady=1)
+date_mode_var = tk.StringVar(value="YYYY-MM")
+
+toggle_frame = ttk.Frame(config_frame)
+toggle_frame.grid(row=3, column=1, columnspan=2, sticky=tk.W, padx=5, pady=1)
+
+ttk.Radiobutton(
+    toggle_frame, text="YYYY-MM Mode", variable=date_mode_var, value="YYYY-MM", command=update_date_labels
+).pack(side=tk.LEFT, padx=(0, 10))
+
+ttk.Radiobutton(
+    toggle_frame, text="DD-MM-YYYY Mode", variable=date_mode_var, value="DD-MM-YYYY", command=update_date_labels
+).pack(side=tk.LEFT)
+
+# Start / End Date Inputs
+start_label = ttk.Label(config_frame, text="Start Date (YYYY-MM):")
+start_label.grid(row=4, column=0, sticky=tk.W, pady=1)
+start_date_entry = ttk.Entry(config_frame, width=30)
+start_date_entry.grid(row=4, column=1, padx=5, pady=1, sticky=tk.W)
+
+end_label = ttk.Label(config_frame, text="End Date (YYYY-MM):")
+end_label.grid(row=5, column=0, sticky=tk.W, pady=1)
+end_date_entry = ttk.Entry(config_frame, width=30)
+end_date_entry.grid(row=5, column=1, padx=5, pady=1, sticky=tk.W)
+
+config_frame.columnconfigure(1, weight=1)
+
+# 4. Action Controls
+control_frame = ttk.Frame(main_frame, padding="4")
+control_frame.pack(fill=tk.X, pady=4)
+
+run_button = ttk.Button(control_frame, text="Start Processing", command=start_processing)
+run_button.pack(side=tk.LEFT, padx=5)
+
+debug_toggle_btn = ttk.Button(control_frame, text="Show Debug Window", command=toggle_debug_window)
+debug_toggle_btn.pack(side=tk.LEFT, padx=5)
+
+status_label = ttk.Label(control_frame, text="Status: Ready")
+status_label.pack(side=tk.LEFT, padx=10)
+
+# 5. Debug Console Frame
+debug_frame = ttk.LabelFrame(main_frame, text="Debug Console Diagnostics", padding="4")
+debug_text = tk.Text(debug_frame, wrap=tk.WORD, height=8, bg="#1e1e1e", fg="#00ff00")
+debug_scrollbar = ttk.Scrollbar(debug_frame, orient=tk.VERTICAL, command=debug_text.yview)
+debug_text.configure(yscrollcommand=debug_scrollbar.set)
+
+if __name__ == "__main__":
+    root.mainloop()
