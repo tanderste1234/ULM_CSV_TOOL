@@ -22,42 +22,53 @@ def sanitize_text(val):
         s = s[1:-1].strip()
     return s
 
-
 def parse_date_range(start_str, end_str, date_mode):
-    s_dt = None
-    e_dt = None
+    # Split input strings on commas to handle multiple ranges
+    raw_starts = [s.strip() for s in start_str.split(",") if s.strip()] if start_str else []
+    raw_ends = [e.strip() for e in end_str.split(",") if e.strip()] if end_str else []
 
-    clean_start = start_str.strip() if start_str else ""
-    clean_end = end_str.strip() if end_str else ""
+    # Match pairs; pad shorter list with empty strings if counts differ
+    max_len = max(len(raw_starts), len(raw_ends))
+    if not max_len:
+        return []
 
-    if date_mode == "YYYY-MM":
-        # Mode 1: Year-Month parsing
-        if clean_start:
-            s_dt = pd.to_datetime(clean_start + "-01", format="%Y-%m-%d", errors="coerce")
-            if pd.notna(s_dt):
-                s_dt = s_dt.floor("D")
-                if not clean_end:
-                    # Set end date boundary to the last day of the start month
-                    e_dt = s_dt + pd.offsets.MonthEnd(1)
+    parsed_ranges = []
 
-        if clean_end:
-            parsed_e = pd.to_datetime(clean_end + "-01", format="%Y-%m-%d", errors="coerce")
-            if pd.notna(parsed_e):
-                e_dt = (parsed_e + pd.offsets.MonthEnd(1)).floor("D")
+    for i in range(max_len):
+        c_start = raw_starts[i] if i < len(raw_starts) else ""
+        c_end = raw_ends[i] if i < len(raw_ends) else ""
 
-    else:
-        # Mode 2: Day-Month-Year parsing
-        if clean_start:
-            s_dt = pd.to_datetime(clean_start, format="%d-%m-%Y", errors="coerce")
-            if pd.notna(s_dt):
-                s_dt = s_dt.floor("D")
+        s_dt = None
+        e_dt = None
 
-        if clean_end:
-            e_dt = pd.to_datetime(clean_end, format="%d-%m-%Y", errors="coerce")
-            if pd.notna(e_dt):
-                e_dt = e_dt.floor("D")
+        if date_mode == "YYYY-MM":
+            if c_start:
+                s_dt = pd.to_datetime(c_start + "-01", format="%Y-%m-%d", errors="coerce")
+                if pd.notna(s_dt):
+                    s_dt = s_dt.floor("D")
+                    if not c_end:
+                        e_dt = s_dt + pd.offsets.MonthEnd(1)
 
-    return s_dt, e_dt
+            if c_end:
+                parsed_e = pd.to_datetime(c_end + "-01", format="%Y-%m-%d", errors="coerce")
+                if pd.notna(parsed_e):
+                    e_dt = (parsed_e + pd.offsets.MonthEnd(1)).floor("D")
+
+        else:  # DD-MM-YYYY mode
+            if c_start:
+                s_dt = pd.to_datetime(c_start, format="%d-%m-%Y", errors="coerce")
+                if pd.notna(s_dt):
+                    s_dt = s_dt.floor("D")
+
+            if c_end:
+                e_dt = pd.to_datetime(c_end, format="%d-%m-%Y", errors="coerce")
+                if pd.notna(e_dt):
+                    e_dt = e_dt.floor("D")
+
+        if s_dt is not None or e_dt is not None:
+            parsed_ranges.append((s_dt, e_dt))
+
+    return parsed_ranges
 
 # ---------------------------------------------------------------------------
 # MAIN STREAMING ENGINE
@@ -82,8 +93,9 @@ def execute_huge_file_processing(
         debug_func(f"ERROR: Input file does not exist: {file_path}")
         return False
 
-    r_start, r_end = parse_date_range(start_date_str, end_date_str, date_mode)
-    has_date_filter = (r_start is not None) or (r_end is not None)
+    # Returns list of tuple bounds [(start1, end1), (start2, end2), ...]
+    date_ranges = parse_date_range(start_date_str, end_date_str, date_mode)
+    has_date_filter = len(date_ranges) > 0
 
     columns_to_keep = []
     if target_columns and target_columns.strip():
@@ -132,7 +144,6 @@ def execute_huge_file_processing(
         else:
             read_kwargs["header"] = 0
 
-        # utf-8-sig automatically strips hidden BOM (\ufeff) markers from Excel CSVs
         with open(file_path, "r", encoding="utf-8-sig", errors="ignore") as in_file:
             with open(output_path, "w", newline="", encoding="utf-8") as out_file:
 
@@ -142,7 +153,6 @@ def execute_huge_file_processing(
                 for chunk_idx, chunk in enumerate(reader):
                     total_rows_processed += len(chunk)
 
-                    # Explicit loop to clean column headers without list comprehensions
                     cleaned_columns = []
                     for col in chunk.columns:
                         cleaned_columns.append(str(col).strip())
@@ -155,18 +165,15 @@ def execute_huge_file_processing(
                         col_missing = True
 
                     if not col_missing:
-                        # Convert raw strings to numeric values safely
                         yr_num = pd.to_numeric(chunk[year_col].astype(str).str.strip(), errors="coerce")
                         day_num = pd.to_numeric(chunk[day_col].astype(str).str.strip(), errors="coerce")
 
-                        # Validate year numbers and Julian Day boundary range (1 to 366)
                         valid_mask = yr_num.notna() & day_num.notna() & (day_num >= 1) & (day_num <= 366)
 
                         if valid_mask.any():
                             clean_years = yr_num[valid_mask].astype(int).astype(str)
                             clean_days = day_num[valid_mask].astype(int)
 
-                            # Vectorized pandas date math via pd.to_timedelta offset
                             base_dates = pd.to_datetime(clean_years + "-01-01", format="%Y-%m-%d", errors="coerce")
                             day_offsets = pd.to_timedelta(clean_days - 1, unit="D")
 
@@ -175,47 +182,38 @@ def execute_huge_file_processing(
                     # Insert formatted string date column at index 0
                     chunk.insert(0, "date", parsed_dates.dt.strftime("%d-%m-%Y"))
 
-                    # Vectorized pandas date range filtering
+                    # Multi-range vectorized logic (row matches if it falls in ANY range)
                     if has_date_filter:
-                        match_mask = pd.Series(True, index=chunk.index)
                         valid_dates_only = parsed_dates.notna()
+                        combined_match_mask = pd.Series(False, index=chunk.index)
 
-                        if r_start is not None:
-                            match_mask = match_mask & valid_dates_only & (parsed_dates >= r_start)
-                        if r_end is not None:
-                            match_mask = match_mask & valid_dates_only & (parsed_dates <= r_end)
+                        for r_start, r_end in date_ranges:
+                            range_mask = valid_dates_only.copy()
+                            if r_start is not None:
+                                range_mask = range_mask & (parsed_dates >= r_start)
+                            if r_end is not None:
+                                range_mask = range_mask & (parsed_dates <= r_end)
 
-                        filtered_chunk = chunk[match_mask].copy()
+                            # Accumulate matches with logical OR (|)
+                            combined_match_mask = combined_match_mask | range_mask
+
+                        filtered_chunk = chunk[combined_match_mask].copy()
                     else:
                         filtered_chunk = chunk.copy()
 
-                    # Explicit column selection supporting both names and positional indices
+                    # Explicit column selection and position-0 date preservation
                     if columns_to_keep:
                         existing_cols = []
-
-                        # Always preserve the generated 'date' column at index 0
                         if "date" in filtered_chunk.columns:
                             existing_cols.append("date")
 
                         for target in columns_to_keep:
                             target_clean = target.strip()
-
-                            # 1. Direct name match
-                            if target_clean in filtered_chunk.columns:
-                                if target_clean not in existing_cols:
-                                    existing_cols.append(target_clean)
-
-                            # 2. Positional index match (e.g., if user passed "1, 2, 3")
-                            elif target_clean.isdigit():
-                                idx = int(target_clean)
-                                # Account for inserted 'date' column shifting original indices by +1
-                                if 0 <= idx < len(filtered_chunk.columns):
-                                    actual_col = filtered_chunk.columns[idx]
-                                    if actual_col not in existing_cols:
-                                        existing_cols.append(actual_col)
+                            if target_clean in filtered_chunk.columns and target_clean not in existing_cols:
+                                existing_cols.append(target_clean)
 
                         filtered_chunk = filtered_chunk[existing_cols]
-                    # Append matched rows directly to stream buffer
+
                     if not filtered_chunk.empty:
                         filtered_chunk.to_csv(
                             out_file,
