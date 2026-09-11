@@ -22,51 +22,73 @@ def sanitize_text(val):
         s = s[1:-1].strip()
     return s
 
-def parse_date_range(start_str, end_str, date_mode):
-    # Split input strings on commas to handle multiple ranges
+def parse_date_range(start_str, end_str, date_mode, debug_func=None):
     raw_starts = [s.strip() for s in start_str.split(",") if s.strip()] if start_str else []
     raw_ends = [e.strip() for e in end_str.split(",") if e.strip()] if end_str else []
 
-    # Match pairs; pad shorter list with empty strings if counts differ
     max_len = max(len(raw_starts), len(raw_ends))
-    if not max_len:
+    if max_len == 0:
         return []
+
+    # Pad shorter list with empty strings to preserve 1-to-1 pairing
+    while len(raw_starts) < max_len:
+        raw_starts.append("")
+    while len(raw_ends) < max_len:
+        raw_ends.append("")
 
     parsed_ranges = []
 
-    for i in range(max_len):
-        c_start = raw_starts[i] if i < len(raw_starts) else ""
-        c_end = raw_ends[i] if i < len(raw_ends) else ""
-
+    for idx, (c_start, c_end) in enumerate(zip(raw_starts, raw_ends), start=1):
         s_dt = None
         e_dt = None
 
         if date_mode == "YYYY-MM":
             if c_start:
-                s_dt = pd.to_datetime(c_start + "-01", format="%Y-%m-%d", errors="coerce")
+                # Handle YYYY-MM or YYYY/MM
+                clean_s = c_start.replace("/", "-")
+                s_dt = pd.to_datetime(clean_s + "-01", format="%Y-%m-%d", errors="coerce")
                 if pd.notna(s_dt):
                     s_dt = s_dt.floor("D")
                     if not c_end:
                         e_dt = s_dt + pd.offsets.MonthEnd(1)
+                elif debug_func:
+                    debug_func(f"WARN: Failed to parse Start Date #{idx} ('{c_start}') in YYYY-MM mode.")
 
             if c_end:
-                parsed_e = pd.to_datetime(c_end + "-01", format="%Y-%m-%d", errors="coerce")
+                clean_e = c_end.replace("/", "-")
+                parsed_e = pd.to_datetime(clean_e + "-01", format="%Y-%m-%d", errors="coerce")
                 if pd.notna(parsed_e):
                     e_dt = (parsed_e + pd.offsets.MonthEnd(1)).floor("D")
+                elif debug_func:
+                    debug_func(f"WARN: Failed to parse End Date #{idx} ('{c_end}') in YYYY-MM mode.")
 
         else:  # DD-MM-YYYY mode
             if c_start:
-                s_dt = pd.to_datetime(c_start, format="%d-%m-%Y", errors="coerce")
+                # Standardize slashes to dashes
+                clean_s = c_start.replace("/", "-")
+                s_dt = pd.to_datetime(clean_s, format="%d-%m-%Y", errors="coerce")
                 if pd.notna(s_dt):
                     s_dt = s_dt.floor("D")
+                elif debug_func:
+                    debug_func(f"WARN: Failed to parse Start Date #{idx} ('{c_start}'). Expecting DD-MM-YYYY.")
 
             if c_end:
-                e_dt = pd.to_datetime(c_end, format="%d-%m-%Y", errors="coerce")
+                clean_e = c_end.replace("/", "-")
+                e_dt = pd.to_datetime(clean_e, format="%d-%m-%Y", errors="coerce")
                 if pd.notna(e_dt):
                     e_dt = e_dt.floor("D")
+                elif debug_func:
+                    debug_func(f"WARN: Failed to parse End Date #{idx} ('{c_end}'). Expecting DD-MM-YYYY.")
 
         if s_dt is not None or e_dt is not None:
             parsed_ranges.append((s_dt, e_dt))
+
+    if debug_func and parsed_ranges:
+        debug_func(f"SUCCESS: Active Date Filter Ranges Parsed ({len(parsed_ranges)}):")
+        for i, (st, en) in enumerate(parsed_ranges, start=1):
+            st_str = st.strftime("%Y-%m-%d") if st is not None else "UNBOUNDED"
+            en_str = en.strftime("%Y-%m-%d") if en is not None else "UNBOUNDED"
+            debug_func(f"  Range {i}: {st_str}  -->  {en_str}")
 
     return parsed_ranges
 
@@ -86,21 +108,19 @@ def execute_huge_file_processing(
     end_date_str,
     date_mode,
     chunksize,
-    debug_func,
-    progress_func
+    debug_func=print,
+    progress_func=lambda p, w: None
 ):
     if not os.path.exists(file_path):
         debug_func(f"ERROR: Input file does not exist: {file_path}")
         return False
 
-    # Returns list of tuple bounds [(start1, end1), (start2, end2), ...]
-    date_ranges = parse_date_range(start_date_str, end_date_str, date_mode)
+    date_ranges = parse_date_range(start_date_str, end_date_str, date_mode, debug_func)
     has_date_filter = len(date_ranges) > 0
 
     columns_to_keep = []
     if target_columns and target_columns.strip():
-        raw_cols = target_columns.split(",")
-        for c in raw_cols:
+        for c in target_columns.split(","):
             clean_col = c.strip()
             if clean_col:
                 columns_to_keep.append(clean_col)
@@ -116,8 +136,7 @@ def execute_huge_file_processing(
     if not has_header:
         if custom_headers_str and custom_headers_str.strip():
             custom_names = []
-            raw_headers = custom_headers_str.split(",")
-            for c in raw_headers:
+            for c in custom_headers_str.split(","):
                 clean_h = c.strip()
                 if clean_h:
                     custom_names.append(clean_h)
@@ -153,6 +172,7 @@ def execute_huge_file_processing(
                 for chunk_idx, chunk in enumerate(reader):
                     total_rows_processed += len(chunk)
 
+                    # Explicit loop for stripping whitespace from column names
                     cleaned_columns = []
                     for col in chunk.columns:
                         cleaned_columns.append(str(col).strip())
@@ -179,22 +199,16 @@ def execute_huge_file_processing(
 
                             parsed_dates.loc[valid_mask] = (base_dates + day_offsets).dt.floor("D")
 
-                    # Insert formatted string date column at index 0
+                    # Insert date column at position 0
                     chunk.insert(0, "date", parsed_dates.dt.strftime("%d-%m-%Y"))
 
-                    # Multi-range vectorized logic (row matches if it falls in ANY range)
+                    # Multi-range vectorized logic (OR masking)
                     if has_date_filter:
-                        valid_dates_only = parsed_dates.notna()
+                        valid_dates = parsed_dates.notna()
                         combined_match_mask = pd.Series(False, index=chunk.index)
 
                         for r_start, r_end in date_ranges:
-                            range_mask = valid_dates_only.copy()
-                            if r_start is not None:
-                                range_mask = range_mask & (parsed_dates >= r_start)
-                            if r_end is not None:
-                                range_mask = range_mask & (parsed_dates <= r_end)
-
-                            # Accumulate matches with logical OR (|)
+                            range_mask = valid_dates & (parsed_dates >= r_start) & (parsed_dates <= r_end)
                             combined_match_mask = combined_match_mask | range_mask
 
                         filtered_chunk = chunk[combined_match_mask].copy()
@@ -496,20 +510,26 @@ config_frame = ttk.LabelFrame(
     main_frame, text="Filtering & Column Settings", padding="6")
 config_frame.pack(fill=tk.X, pady=2)
 
-ttk.Label(config_frame, text="Columns to Keep (comma-separated):").grid(row=0,
-                                                                        column=0, sticky=tk.W, pady=1)
-cols_entry = ttk.Entry(config_frame, width=50)
-cols_entry.grid(row=0, column=1, columnspan=2, padx=5, pady=1, sticky=tk.EW)
+# Make Column 1 take up all extra horizontal space
+config_frame.columnconfigure(1, weight=1)
 
+# Columns to Keep
+ttk.Label(config_frame, text="Columns to Keep (comma-separated):").grid(
+    row=0, column=0, sticky=tk.W, pady=1)
+cols_entry = ttk.Entry(config_frame)
+cols_entry.grid(row=0, column=1, padx=5, pady=1, sticky=tk.EW)
+
+# Year Column Name
 ttk.Label(config_frame, text="Year Column Name:").grid(
     row=1, column=0, sticky=tk.W, pady=1)
-year_col_entry = ttk.Entry(config_frame, width=30)
-year_col_entry.grid(row=1, column=1, padx=5, pady=1, sticky=tk.W)
+year_col_entry = ttk.Entry(config_frame)
+year_col_entry.grid(row=1, column=1, padx=5, pady=1, sticky=tk.EW)
 
-ttk.Label(config_frame, text="Day of Year Column Name (1-365):").grid(row=2,
-                                                                      column=0, sticky=tk.W, pady=1)
-day_col_entry = ttk.Entry(config_frame, width=30)
-day_col_entry.grid(row=2, column=1, padx=5, pady=1, sticky=tk.W)
+# Day of Year Column Name
+ttk.Label(config_frame, text="Day of Year Column Name (1-365):").grid(
+    row=2, column=0, sticky=tk.W, pady=1)
+day_col_entry = ttk.Entry(config_frame)
+day_col_entry.grid(row=2, column=1, padx=5, pady=1, sticky=tk.EW)
 
 # Date Format Toggle Radio Buttons
 ttk.Label(config_frame, text="Date Format Selection:").grid(
@@ -517,7 +537,7 @@ ttk.Label(config_frame, text="Date Format Selection:").grid(
 date_mode_var = tk.StringVar(value="YYYY-MM")
 
 toggle_frame = ttk.Frame(config_frame)
-toggle_frame.grid(row=3, column=1, columnspan=2, sticky=tk.W, padx=5, pady=1)
+toggle_frame.grid(row=3, column=1, sticky=tk.W, padx=5, pady=1)
 
 ttk.Radiobutton(
     toggle_frame, text="YYYY-MM Mode", variable=date_mode_var, value="YYYY-MM", command=update_date_labels
@@ -527,19 +547,16 @@ ttk.Radiobutton(
     toggle_frame, text="DD-MM-YYYY Mode", variable=date_mode_var, value="DD-MM-YYYY", command=update_date_labels
 ).pack(side=tk.LEFT)
 
-# Start / End Date Inputs
+# Start / End Date Inputs (NOW FULL WIDTH)
 start_label = ttk.Label(config_frame, text="Start Date (YYYY-MM):")
 start_label.grid(row=4, column=0, sticky=tk.W, pady=1)
-start_date_entry = ttk.Entry(config_frame, width=30)
-start_date_entry.grid(row=4, column=1, padx=5, pady=1, sticky=tk.W)
+start_date_entry = ttk.Entry(config_frame)
+start_date_entry.grid(row=4, column=1, padx=5, pady=1, sticky=tk.EW)
 
 end_label = ttk.Label(config_frame, text="End Date (YYYY-MM):")
 end_label.grid(row=5, column=0, sticky=tk.W, pady=1)
-end_date_entry = ttk.Entry(config_frame, width=30)
-end_date_entry.grid(row=5, column=1, padx=5, pady=1, sticky=tk.W)
-
-config_frame.columnconfigure(1, weight=1)
-
+end_date_entry = ttk.Entry(config_frame)
+end_date_entry.grid(row=5, column=1, padx=5, pady=1, sticky=tk.EW)
 # 4. Action Controls
 control_frame = ttk.Frame(main_frame, padding="4")
 control_frame.pack(fill=tk.X, pady=4)
