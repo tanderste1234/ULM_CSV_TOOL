@@ -19,7 +19,7 @@ Follow these steps to install and run the tool.
 5. you should save the tool somewhere easy to get to as you will need to either make a shortcut or have this file on the desktop
 
 > **Note:** `ULMCSVTOOLV1.2.3.exe` is a fully self-contained file. You do not need to install Python, run any command-line scripts, or download additional setup files—just open the file, and you are good to go!
-## 💻 using the tool
+## 💻 Using The Tool
 1. first you will need to double-click the `ULMCSVTOOLV1.2.3.exe` file to run the tool
 2. next you will need to hit the <kbd>Browse...</kbd> button in the program window next to the `input file:` label and then use window's file explorer to find where you put the `template.csv` file and select it
 3. once you select it the program will automatically populate the headers
