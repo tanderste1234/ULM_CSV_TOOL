@@ -4,7 +4,7 @@ the replacement for the old query system for ULM
 
 
 Follow these steps to install and run the tool.
-### 1. Download template file
+### 1. Download Template File
 1. Open the `template.csv` file in this repository by clicking on the file name.
 2.  On the file preview screen, locate the group of 3 buttons in the top-right corner (the first button is labeled **Raw**).
 3. Click the 3rd button on the right (the download icon, which shows the tooltip **"Download raw file"** when you hover over it) to save the file to your computer.
