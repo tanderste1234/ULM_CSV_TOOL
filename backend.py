@@ -510,53 +510,54 @@ config_frame = ttk.LabelFrame(
     main_frame, text="Filtering & Column Settings", padding="6")
 config_frame.pack(fill=tk.X, pady=2)
 
-# Make Column 1 take up all extra horizontal space
-config_frame.columnconfigure(1, weight=1)
+# Column 2 absorbs all extra horizontal space as the window expands
+config_frame.columnconfigure(2, weight=1)
 
-# Columns to Keep
-ttk.Label(config_frame, text="Columns to Keep (comma-separated):").grid(
+# Columns to Keep (Spans Col 1 & 2 -> Stretches across)
+ttk.Label(config_frame, text="Columns to Keep:").grid(
     row=0, column=0, sticky=tk.W, pady=1)
 cols_entry = ttk.Entry(config_frame)
-cols_entry.grid(row=0, column=1, padx=5, pady=1, sticky=tk.EW)
+cols_entry.grid(row=0, column=1, columnspan=2, padx=5, pady=1, sticky=tk.EW)
 
-# Year Column Name
-ttk.Label(config_frame, text="Year Column Name:").grid(
+# Year Column (Col 1 only -> Short)
+ttk.Label(config_frame, text="Year Column:").grid(
     row=1, column=0, sticky=tk.W, pady=1)
-year_col_entry = ttk.Entry(config_frame)
-year_col_entry.grid(row=1, column=1, padx=5, pady=1, sticky=tk.EW)
+year_col_entry = ttk.Entry(config_frame, width=20)
+year_col_entry.grid(row=1, column=1, padx=5, pady=1, sticky=tk.W)
 
-# Day of Year Column Name
-ttk.Label(config_frame, text="Day of Year Column Name (1-365):").grid(
+# Day Column (Col 1 only -> Short)
+ttk.Label(config_frame, text="Day Column:").grid(
     row=2, column=0, sticky=tk.W, pady=1)
-day_col_entry = ttk.Entry(config_frame)
-day_col_entry.grid(row=2, column=1, padx=5, pady=1, sticky=tk.EW)
+day_col_entry = ttk.Entry(config_frame, width=20)
+day_col_entry.grid(row=2, column=1, padx=5, pady=1, sticky=tk.W)
 
-# Date Format Toggle Radio Buttons
-ttk.Label(config_frame, text="Date Format Selection:").grid(
+# Date Format Selection
+ttk.Label(config_frame, text="Date Format:").grid(
     row=3, column=0, sticky=tk.W, pady=1)
 date_mode_var = tk.StringVar(value="YYYY-MM")
 
 toggle_frame = ttk.Frame(config_frame)
-toggle_frame.grid(row=3, column=1, sticky=tk.W, padx=5, pady=1)
+toggle_frame.grid(row=3, column=1, columnspan=2, sticky=tk.W, padx=5, pady=1)
 
 ttk.Radiobutton(
-    toggle_frame, text="YYYY-MM Mode", variable=date_mode_var, value="YYYY-MM", command=update_date_labels
+    toggle_frame, text="YYYY-MM", variable=date_mode_var, value="YYYY-MM", command=update_date_labels
 ).pack(side=tk.LEFT, padx=(0, 10))
 
 ttk.Radiobutton(
-    toggle_frame, text="DD-MM-YYYY Mode", variable=date_mode_var, value="DD-MM-YYYY", command=update_date_labels
+    toggle_frame, text="DD-MM-YYYY", variable=date_mode_var, value="DD-MM-YYYY", command=update_date_labels
 ).pack(side=tk.LEFT)
 
-# Start / End Date Inputs (NOW FULL WIDTH)
-start_label = ttk.Label(config_frame, text="Start Date (YYYY-MM):")
+# Start Date (Spans Col 1 & 2 -> Stretches across)
+start_label = ttk.Label(config_frame, text="Start Date:")
 start_label.grid(row=4, column=0, sticky=tk.W, pady=1)
 start_date_entry = ttk.Entry(config_frame)
-start_date_entry.grid(row=4, column=1, padx=5, pady=1, sticky=tk.EW)
+start_date_entry.grid(row=4, column=1, columnspan=2, padx=5, pady=1, sticky=tk.EW)
 
-end_label = ttk.Label(config_frame, text="End Date (YYYY-MM):")
+# End Date (Spans Col 1 & 2 -> Stretches across)
+end_label = ttk.Label(config_frame, text="End Date:")
 end_label.grid(row=5, column=0, sticky=tk.W, pady=1)
 end_date_entry = ttk.Entry(config_frame)
-end_date_entry.grid(row=5, column=1, padx=5, pady=1, sticky=tk.EW)
+end_date_entry.grid(row=5, column=1, columnspan=2, padx=5, pady=1, sticky=tk.EW)
 # 4. Action Controls
 control_frame = ttk.Frame(main_frame, padding="4")
 control_frame.pack(fill=tk.X, pady=4)
