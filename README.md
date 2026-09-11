@@ -10,7 +10,7 @@ Follow these steps to install and run the tool.
 3. Click the 3rd button on the right (the download icon, which shows the tooltip **"Download raw file"** when you hover over it) to save the file to your computer.
 4. when the save window opens up save it somewhere you can easily access as you will need to know where it is when using the tool
 
-### 2. Download exe file and Run
+### 2. Downloading The Exe File
 
 1. Open the `releases` folder in this repository.
 2. Click on the `ULMCSVTOOLV1.2.3.exe` file.
