@@ -3,7 +3,7 @@ the replacement for the old query system for ULM
 ## 🛠️ Prerequisites & Setup
 
 
-Follow these steps to install and run the tool.
+Follow these steps to install the tool.
 ### 1. Download Template File
 1. Open the `template.csv` file in this repository by clicking on the file name.
 2.  On the file preview screen, locate the group of 3 buttons in the top-right corner (the first button is labeled **Raw**).
