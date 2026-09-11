@@ -22,10 +22,11 @@ Follow these steps to install and run the tool.
 ## 💻 Using The Tool
 ### 1. Selecting The Input and Output Files
 1. first you will need to double-click the `ULMCSVTOOLV1.2.3.exe` file to run the tool or if you made a desktop shortcut double-click the shortcut
-2. next you will need to hit the <kbd>Browse...</kbd> button in the program window next to the `input file:` label and then use window's file explorer to find where you put the `template.csv` file and select it
-3. once you select it the program will automatically populate the headers
-4. after doing that you will need to click the checkbox labeled "CSV has no header row(manually define below)" so that is is checked ✅
-5. then you will go back up to the input file and hit the <kbd>Browse...</kbd> button again and navigate to your data file's location using windows file explorer and select the file
+2. next you will need to hit the <kbd>Browse...</kbd> button in the program window next to the `input file:` label and after the white input box
+3. use window's file explorer to find where you put the `template.csv` file and select it
+4. once you select it the program will automatically populate the headers
+5. after doing that you will need to click the checkbox labeled "CSV has no header row(manually define below)" so that is is checked ✅
+6. then you will go back up to the input file and hit the <kbd>Browse...</kbd> button again and navigate to your data file's location using windows file explorer and select the file
 > **Note:** the output file will automatically name itself after your input file's name with `_processed.csv` on the end of the original file name if you do not want the output file to be named this way please click the <kbd>Browse...</kbd> button on the end of the input labeled output file and navigate to the place you would like to have your output file then name it whatever you want
 ### 2. Selecting The Fields
 1. The next step is to select what fields you are interested in and enter them in a comma separated list in the columns to keep field
