@@ -38,7 +38,7 @@ Follow these steps to install the tool.
 1. the next input is your date format field choose which ever format you want the default is YYYY-MM
 >  **Note:** to change the date format simply click the diamond next to the desired format
 3. once you select the date format of your preference then please enter a comma separated list of start dates and then a respective list of end dates
-> **Note:** Please make sure to enter an equal amount of start and end dates as the code will not work other wise and also make sure to follow the date format you have selected as improperly formatted dates will not yield correct results  also please make sure use dates that are valid for your data as it will not show anything not in the data file
+> **Note:** Please make sure to enter an equal amount of start and end dates as the code will not work other wise. If you do not follow the date format you have selected it will not yield correct results. Also please make sure to use dates that are present in the date file you have selected as anything not present in your data file will cause errors if entered
 4. once you have correctly entered the dates hit the <kbd>Start Processing</kbd> button on the bottom left of the window next to the <kbd>Show Debug Window</kbd> button.
 > **Note:** the Show debug window button is only for finding problems with the application and you should not need it
 ### 4. Checking The Output File
