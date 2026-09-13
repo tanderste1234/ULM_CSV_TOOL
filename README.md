@@ -32,11 +32,14 @@ Follow these steps to install the tool.
 1. The next step is to select what fields you are interested in and enter them in a comma separated list in the columns to keep field
 > **Note:** the time field is not automatically kept so if you would like the times kept please remember to add it in this field
 2. once you have decided what fields you are interested in and entered them correctly
-3. in the next two fields labeled Year Column and Date Column refer to the headers first two entries and enter the names with out commas or spaces this may change but "year" should be the Year Column input and "day" should be entered into the Date Column input
+3. in the next two fields labeled Year Column and Date Column refer to the headers in the column headers for the names of the year and date fields they should be the first two entries you can copy them if you want but make sure to remove any commas or spaces
+> **Note:** these column names should be "year" and "day" but refer to the headers if the first 2 headers are different 
 ### 3. Selecting the Dates
 1. the next input is your date format field choose which ever format you want the default is YYYY-MM
-2. once you select the date format of your preference then please enter a comma separated list of start dates and then a respective list of end dates **Note:** Please make sure to enter an equal amount of start and end dates as the code will not work other wise and also make sure to follow the date format you have selected as improperly formatted dates will not yield correct results  also please make sure use dates that are valid for your data as it will not show anything not in the data file
-3. once you have correctly entered the dates hit the <kbd>Start Processing</kbd> button on the bottom left of the window next to the <kbd>Show Debug Window</kbd> button.
+>  **Note:** to change the date format simply click the diamond next to the desired format
+3. once you select the date format of your preference then please enter a comma separated list of start dates and then a respective list of end dates
+> **Note:** Please make sure to enter an equal amount of start and end dates as the code will not work other wise and also make sure to follow the date format you have selected as improperly formatted dates will not yield correct results  also please make sure use dates that are valid for your data as it will not show anything not in the data file
+4. once you have correctly entered the dates hit the <kbd>Start Processing</kbd> button on the bottom left of the window next to the <kbd>Show Debug Window</kbd> button.
 > **Note:** the Show debug window button is only for finding problems with the application and you should not need it
 ### 4. Checking The Output File
 1. after the processing is finished there should be a pop up saying the processing completed successfully click the <kbd>okay</kbd> button
