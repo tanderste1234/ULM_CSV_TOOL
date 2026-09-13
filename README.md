@@ -35,8 +35,8 @@ Follow these steps to install the tool.
 3. in the next two fields labeled Year Column and Date Column refer to the headers in the column headers for the names of the year and date fields they should be the first two entries you can copy them if you want but make sure to remove any commas or spaces
 > **Note:** these column names should be "year" and "day" but refer to the headers if the first 2 headers are different 
 ### 3. Selecting the Dates
-1. the next input is your date format field choose which ever format you want the default is YYYY-MM
->  **Note:** to change the date format simply click the diamond next to the desired format
+1. the next input is your date format field to choose the date format simply click the diamond next to the desired format 
+>  **Note:** the default is YYYY-MM
 3. once you select the date format of your preference then please enter a comma separated list of start dates and then a respective list of end dates
 > **Note:** Please make sure to enter an equal amount of start and end dates as the code will not work other wise. If you do not follow the date format you have selected it will not yield correct results. Also please make sure to use dates that are present in the data file you have selected as anything not present in your data file will cause errors if entered
 4. once you have correctly entered the dates hit the <kbd>Start Processing</kbd> button on the bottom left of the window next to the <kbd>Show Debug Window</kbd> button.
