@@ -1,6 +1,6 @@
 # ULM_CSV_TOOL
 the replacement for the old query system for ULM
-## 🛠️ Prerequisites & Setup
+## 🛠️ Prerequisites & Setup for Version 1.3.0
 Follow these steps to install the tool.
 ### 1. Downloading The Exe File
 
@@ -11,7 +11,7 @@ Follow these steps to install the tool.
 5. you should save the tool somewhere easy to get to as you will need to either make a shortcut or have this file on the desktop
 
 > **Note:** `ULMCSVTOOLV1.3.0.exe` is a fully self-contained file. You do not need to install Python, run any command-line scripts, or download additional setup files—just open the file, and you are good to go!
-## 💻 Using The Tool
+## 💻 Using The Tool for Version 1.3.0
 ### 1. Selecting The Input and Output Files
 1. First you will need to double-click the `ULMCSVTOOLV1.3.0.exe` file to run the tool or if you made a desktop shortcut double-click the shortcut
 2. Next you will need to hit the <kbd>Browse...</kbd> button in the program window next to the `input file:` label and after the white input box
@@ -35,6 +35,6 @@ Follow these steps to install the tool.
 1. after the processing is finished there should be a pop up saying the processing completed successfully click the <kbd>okay</kbd> button
 2. now open the output file with whatever program you wish and check that your filtered data is there
 > **Note:** if you kept the default it will have made the output in the input file folder with `_processed.csv` on the end of it
-### 🪛 Troubleshooting:
+## 🪛 Troubleshooting:
 1. if you ever need to update the backend.py file and you need to pack it into an exe file you need to run this command inside the folder you downloaded the repo to then pull it out of the dist folder and move it into the releases folder and then delete the dist folder and also if you do this remember to update the version numbers the first one is For MAJOR changes the second number is for minor changes and the third number is for small changes
 > **Command:** pyinstaller --onefile --noconsole --name "ULMCSVTOOLV1.3.0" --icon "ULM_icon.ico" --add-data "templateFile.csv;." backend.py
