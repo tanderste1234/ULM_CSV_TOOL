@@ -1,32 +1,21 @@
 # ULM_CSV_TOOL
 the replacement for the old query system for ULM
 ## 🛠️ Prerequisites & Setup
-
-
 Follow these steps to install the tool.
-### 1. Download Template File
-1. Open the `template.csv` file in this repository by clicking on the file name.
-2.  On the file preview screen, locate the group of 3 buttons in the top-right corner (the first button is labeled **Raw**).
-3. Click the 3rd button on the right (the download icon, which shows the tooltip **"Download raw file"** when you hover over it) to save the file to your computer.
-4. when the save window opens up save it somewhere you can easily access as you will need to know where it is when using the tool
-
-### 2. Downloading The Exe File
+### 1. Downloading The Exe File
 
 1. Open the `releases` folder in this repository.
-2. Click on the `ULMCSVTOOLV1.2.3.exe` file.
+2. Click on the `ULMCSVTOOLV1.3.0.exe` file.
 3. On the file preview screen, locate the group of 3 buttons in the top-right corner (the first button is labeled **Raw**).
 4. Click the 3rd button on the right (the download icon, which shows the tooltip **"Download raw file"** when you hover over it) to save the file to your computer.
 5. you should save the tool somewhere easy to get to as you will need to either make a shortcut or have this file on the desktop
 
-> **Note:** `ULMCSVTOOLV1.2.3.exe` is a fully self-contained file. You do not need to install Python, run any command-line scripts, or download additional setup files—just open the file, and you are good to go!
+> **Note:** `ULMCSVTOOLV1.3.0.exe` is a fully self-contained file. You do not need to install Python, run any command-line scripts, or download additional setup files—just open the file, and you are good to go!
 ## 💻 Using The Tool
 ### 1. Selecting The Input and Output Files
-1. first you will need to double-click the `ULMCSVTOOLV1.2.3.exe` file to run the tool or if you made a desktop shortcut double-click the shortcut
-2. next you will need to hit the <kbd>Browse...</kbd> button in the program window next to the `input file:` label and after the white input box
-3. use window's file explorer to find where you put the `template.csv` file and select it
-4. once you select it the program will automatically populate the headers
-5. after doing that you will need to click the checkbox labeled "CSV has no header row(manually define below)" so that is is checked ✅
-6. then you will go back up to the input file and hit the <kbd>Browse...</kbd> button again and navigate to your data file's location using windows file explorer and select the file
+1. First you will need to double-click the `ULMCSVTOOLV1.3.0.exe` file to run the tool or if you made a desktop shortcut double-click the shortcut
+2. Next you will need to hit the <kbd>Browse...</kbd> button in the program window next to the `input file:` label and after the white input box
+3. Navigate to your data file's location using windows file explorer and select the file
 > **Note:** the output file will automatically name itself after your input file's name with `_processed.csv` on the end of the original file name if you do not want the output file to be named this way please click the <kbd>Browse...</kbd> button on the end of the input labeled output file and navigate to the place you would like to have your output file then name it whatever you want
 ### 2. Selecting The Fields
 1. The next step is to select what fields you are interested in and enter them in a comma separated list in the columns to keep field
@@ -46,3 +35,5 @@ Follow these steps to install the tool.
 1. after the processing is finished there should be a pop up saying the processing completed successfully click the <kbd>okay</kbd> button
 2. now open the output file with whatever program you wish and check that your filtered data is there
 > **Note:** if you kept the default it will have made the output in the input file folder with `_processed.csv` on the end of it
+### 🪛 if you ever need to update the backend.py file and you need to pack it into an exe file you need to run this command inside the folder you downloaded the repo to then pull it out of the dist folder and move it into the releases folder and then delete the dist folder and also if you do this remember to update the version numbers the first one is For MAJOR changes the second number is for minor changes and the third number is for small changes
+> **Command:** pyinstaller --onefile --noconsole --name "ULMCSVTOOLV1.3.0" --icon "ULM_icon.ico" --add-data "templateFile.csv;." backend.py
