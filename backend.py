@@ -1,3 +1,4 @@
+#©Thomas Edmund Anderson 2026
 import os
 import sys
 import calendar
@@ -7,11 +8,12 @@ import gc
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import pandas as pd
-
+import csv
 
 # ---------------------------------------------------------------------------
 # CORE HELPER FUNCTIONS
 # ---------------------------------------------------------------------------
+
 
 def sanitize_text(val):
     """Sanitize string values by stripping whitespace and extra quotes."""
@@ -22,9 +24,33 @@ def sanitize_text(val):
         s = s[1:-1].strip()
     return s
 
+
+def get_headers_from_template(template_path="templateFile.csv"):
+    """Reads column header names directly from templateFile.csv."""
+    if not os.path.exists(template_path):
+        return None
+
+    try:
+        with open(template_path, mode='r', newline='') as f:
+            reader = csv.reader(f)
+            template_headers = next(reader)
+            return template_headers
+    except Exception:
+        return None
+
+
 def parse_date_range(start_str, end_str, date_mode, debug_func=None):
-    raw_starts = [s.strip() for s in start_str.split(",") if s.strip()] if start_str else []
-    raw_ends = [e.strip() for e in end_str.split(",") if e.strip()] if end_str else []
+    raw_starts = []
+    if start_str:
+        for s in start_str.split(","):
+            if s.strip():
+                raw_starts.append(s.strip())
+
+    raw_ends = []
+    if end_str:
+        for e in end_str.split(","):
+            if e.strip():
+                raw_ends.append(e.strip())
 
     max_len = max(len(raw_starts), len(raw_ends))
     if max_len == 0:
@@ -46,45 +72,54 @@ def parse_date_range(start_str, end_str, date_mode, debug_func=None):
             if c_start:
                 # Handle YYYY-MM or YYYY/MM
                 clean_s = c_start.replace("/", "-")
-                s_dt = pd.to_datetime(clean_s + "-01", format="%Y-%m-%d", errors="coerce")
+                s_dt = pd.to_datetime(
+                    clean_s + "-01", format="%Y-%m-%d", errors="coerce")
                 if pd.notna(s_dt):
                     s_dt = s_dt.floor("D")
                     if not c_end:
                         e_dt = s_dt + pd.offsets.MonthEnd(1)
                 elif debug_func:
-                    debug_func(f"WARN: Failed to parse Start Date #{idx} ('{c_start}') in YYYY-MM mode.")
+                    debug_func(f"WARN: Failed to parse Start Date #{
+                               idx} ('{c_start}') in YYYY-MM mode.")
 
             if c_end:
                 clean_e = c_end.replace("/", "-")
-                parsed_e = pd.to_datetime(clean_e + "-01", format="%Y-%m-%d", errors="coerce")
+                parsed_e = pd.to_datetime(
+                    clean_e + "-01", format="%Y-%m-%d", errors="coerce")
                 if pd.notna(parsed_e):
                     e_dt = (parsed_e + pd.offsets.MonthEnd(1)).floor("D")
                 elif debug_func:
-                    debug_func(f"WARN: Failed to parse End Date #{idx} ('{c_end}') in YYYY-MM mode.")
+                    debug_func(f"WARN: Failed to parse End Date #{
+                               idx} ('{c_end}') in YYYY-MM mode.")
 
         else:  # DD-MM-YYYY mode
             if c_start:
                 # Standardize slashes to dashes
                 clean_s = c_start.replace("/", "-")
-                s_dt = pd.to_datetime(clean_s, format="%d-%m-%Y", errors="coerce")
+                s_dt = pd.to_datetime(
+                    clean_s, format="%d-%m-%Y", errors="coerce")
                 if pd.notna(s_dt):
                     s_dt = s_dt.floor("D")
                 elif debug_func:
-                    debug_func(f"WARN: Failed to parse Start Date #{idx} ('{c_start}'). Expecting DD-MM-YYYY.")
+                    debug_func(f"WARN: Failed to parse Start Date #{
+                               idx} ('{c_start}'). Expecting DD-MM-YYYY.")
 
             if c_end:
                 clean_e = c_end.replace("/", "-")
-                e_dt = pd.to_datetime(clean_e, format="%d-%m-%Y", errors="coerce")
+                e_dt = pd.to_datetime(
+                    clean_e, format="%d-%m-%Y", errors="coerce")
                 if pd.notna(e_dt):
                     e_dt = e_dt.floor("D")
                 elif debug_func:
-                    debug_func(f"WARN: Failed to parse End Date #{idx} ('{c_end}'). Expecting DD-MM-YYYY.")
+                    debug_func(f"WARN: Failed to parse End Date #{
+                               idx} ('{c_end}'). Expecting DD-MM-YYYY.")
 
         if s_dt is not None or e_dt is not None:
             parsed_ranges.append((s_dt, e_dt))
 
     if debug_func and parsed_ranges:
-        debug_func(f"SUCCESS: Active Date Filter Ranges Parsed ({len(parsed_ranges)}):")
+        debug_func(
+            f"SUCCESS: Active Date Filter Ranges Parsed ({len(parsed_ranges)}):")
         for i, (st, en) in enumerate(parsed_ranges, start=1):
             st_str = st.strftime("%Y-%m-%d") if st is not None else "UNBOUNDED"
             en_str = en.strftime("%Y-%m-%d") if en is not None else "UNBOUNDED"
@@ -96,11 +131,10 @@ def parse_date_range(start_str, end_str, date_mode, debug_func=None):
 # MAIN STREAMING ENGINE
 # ---------------------------------------------------------------------------
 
+
 def execute_huge_file_processing(
     file_path,
     output_path,
-    has_header,
-    custom_headers_str,
     target_columns,
     year_field_name,
     day_field_name,
@@ -108,6 +142,7 @@ def execute_huge_file_processing(
     end_date_str,
     date_mode,
     chunksize,
+    template_path="templateFile.csv",
     debug_func=print,
     progress_func=lambda p, w: None
 ):
@@ -115,7 +150,14 @@ def execute_huge_file_processing(
         debug_func(f"ERROR: Input file does not exist: {file_path}")
         return False
 
-    date_ranges = parse_date_range(start_date_str, end_date_str, date_mode, debug_func)
+    template_headers = get_headers_from_template(template_path)
+    if not template_headers:
+        debug_func(f"ERROR: Could not read headers from template file: {
+                   template_path}")
+        return False
+
+    date_ranges = parse_date_range(
+        start_date_str, end_date_str, date_mode, debug_func)
     has_date_filter = len(date_ranges) > 0
 
     columns_to_keep = []
@@ -129,20 +171,9 @@ def execute_huge_file_processing(
     day_col = day_field_name.strip() if day_field_name else None
 
     if not year_col or not day_col:
-        debug_func("ERROR: Both Year field name and Day-of-Year field name must be specified.")
+        debug_func(
+            "ERROR: Both Year field name and Day-of-Year field name must be specified.")
         return False
-
-    custom_names = None
-    if not has_header:
-        if custom_headers_str and custom_headers_str.strip():
-            custom_names = []
-            for c in custom_headers_str.split(","):
-                clean_h = c.strip()
-                if clean_h:
-                    custom_names.append(clean_h)
-        else:
-            debug_func("ERROR: 'CSV has no header row' was selected, but no custom headers were provided.")
-            return False
 
     total_rows_processed = 0
     total_rows_written = 0
@@ -154,14 +185,10 @@ def execute_huge_file_processing(
             "chunksize": chunksize,
             "dtype": str,
             "low_memory": False,
-            "on_bad_lines": "skip"
+            "on_bad_lines": "skip",
+            "header": None,
+            "names": template_headers
         }
-
-        if not has_header:
-            read_kwargs["header"] = None
-            read_kwargs["names"] = custom_names
-        else:
-            read_kwargs["header"] = 0
 
         with open(file_path, "r", encoding="utf-8-sig", errors="ignore") as in_file:
             with open(output_path, "w", newline="", encoding="utf-8") as out_file:
@@ -178,37 +205,47 @@ def execute_huge_file_processing(
                         cleaned_columns.append(str(col).strip())
                     chunk.columns = cleaned_columns
 
-                    parsed_dates = pd.Series(index=chunk.index, dtype="datetime64[ns]")
+                    parsed_dates = pd.Series(
+                        index=chunk.index, dtype="datetime64[ns]")
 
                     col_missing = False
                     if year_col not in chunk.columns or day_col not in chunk.columns:
                         col_missing = True
 
                     if not col_missing:
-                        yr_num = pd.to_numeric(chunk[year_col].astype(str).str.strip(), errors="coerce")
-                        day_num = pd.to_numeric(chunk[day_col].astype(str).str.strip(), errors="coerce")
+                        yr_num = pd.to_numeric(chunk[year_col].astype(
+                            str).str.strip(), errors="coerce")
+                        day_num = pd.to_numeric(chunk[day_col].astype(
+                            str).str.strip(), errors="coerce")
 
                         valid_mask = yr_num.notna() & day_num.notna() & (day_num >= 1) & (day_num <= 366)
 
                         if valid_mask.any():
-                            clean_years = yr_num[valid_mask].astype(int).astype(str)
+                            clean_years = yr_num[valid_mask].astype(
+                                int).astype(str)
                             clean_days = day_num[valid_mask].astype(int)
 
-                            base_dates = pd.to_datetime(clean_years + "-01-01", format="%Y-%m-%d", errors="coerce")
-                            day_offsets = pd.to_timedelta(clean_days - 1, unit="D")
+                            base_dates = pd.to_datetime(
+                                clean_years + "-01-01", format="%Y-%m-%d", errors="coerce")
+                            day_offsets = pd.to_timedelta(
+                                clean_days - 1, unit="D")
 
-                            parsed_dates.loc[valid_mask] = (base_dates + day_offsets).dt.floor("D")
+                            parsed_dates.loc[valid_mask] = (
+                                base_dates + day_offsets).dt.floor("D")
 
                     # Insert date column at position 0
-                    chunk.insert(0, "date", parsed_dates.dt.strftime("%d-%m-%Y"))
+                    chunk.insert(
+                        0, "date", parsed_dates.dt.strftime("%d-%m-%Y"))
 
                     # Multi-range vectorized logic (OR masking)
                     if has_date_filter:
                         valid_dates = parsed_dates.notna()
-                        combined_match_mask = pd.Series(False, index=chunk.index)
+                        combined_match_mask = pd.Series(
+                            False, index=chunk.index)
 
                         for r_start, r_end in date_ranges:
-                            range_mask = valid_dates & (parsed_dates >= r_start) & (parsed_dates <= r_end)
+                            range_mask = valid_dates & (
+                                parsed_dates >= r_start) & (parsed_dates <= r_end)
                             combined_match_mask = combined_match_mask | range_mask
 
                         filtered_chunk = chunk[combined_match_mask].copy()
@@ -243,9 +280,11 @@ def execute_huge_file_processing(
                 out_file.flush()
 
         if total_rows_written == 0:
-            debug_func("WARN: Processing finished, but 0 rows matched your criteria.")
+            debug_func(
+                "WARN: Processing finished, but 0 rows matched your criteria.")
         else:
-            debug_func(f"SUCCESS: Written {total_rows_written:,} / {total_rows_processed:,} rows to target.")
+            debug_func(f"SUCCESS: Written {
+                       total_rows_written:,} / {total_rows_processed:,} rows to target.")
 
         return True
 
@@ -289,9 +328,6 @@ def browse_input():
             output_entry.delete(0, tk.END)
             output_entry.insert(0, suggested_output)
 
-        if not no_header_var.get():
-            load_headers()
-
 
 def browse_output():
     path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[
@@ -301,44 +337,10 @@ def browse_output():
         output_entry.insert(0, path)
 
 
-def toggle_header_mode():
-    if no_header_var.get():
-        inspect_btn.config(state=tk.DISABLED)
-        header_status_label.config(text="Manual header entry active.")
-    else:
-        inspect_btn.config(state=tk.NORMAL)
-        header_status_label.config(text="No file inspected.")
-
-
-def load_headers():
-    input_path = input_entry.get().strip()
-    if not input_path or not os.path.exists(input_path):
-        messagebox.showwarning(
-            "Warning", "Please select a valid input CSV file first.")
-        return
-
-    try:
-        with open(input_path, 'r', encoding='utf-8', errors='ignore') as f:
-            df_head = pd.read_csv(f, nrows=0)
-            headers = []
-            for col in df_head.columns:
-                headers.append(str(col).strip())
-
-        custom_headers_entry.delete(0, tk.END)
-        custom_headers_entry.insert(0, ", ".join(headers))
-
-        header_status_label.config(
-            text=f"Loaded {len(headers)} columns from file.")
-        debug_log(f"Inspected CSV Headers: {headers}")
-    except Exception as e:
-        messagebox.showerror(
-            "Header Error", f"Could not read headers: {str(e)}")
-
-
 def toggle_debug_window():
     global debug_visible
     if not debug_visible:
-        root.geometry("750x740")
+        root.geometry("750x640")
         debug_frame.pack(fill=tk.BOTH, expand=True, pady=4)
         debug_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         debug_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -346,7 +348,7 @@ def toggle_debug_window():
         debug_visible = True
     else:
         debug_frame.pack_forget()
-        root.geometry("750x520")
+        root.geometry("750x420")
         debug_toggle_btn.config(text="Show Debug Window")
         debug_visible = False
 
@@ -388,7 +390,6 @@ def start_processing():
 
 
 def run_job_thread(input_file, output_file):
-    has_header = not no_header_var.get()
     temp_path = output_file + ".tmp"
 
     if os.path.exists(temp_path):
@@ -402,8 +403,6 @@ def run_job_thread(input_file, output_file):
     success = execute_huge_file_processing(
         file_path=input_file,
         output_path=temp_path,
-        has_header=has_header,
-        custom_headers_str=custom_headers_entry.get(),
         target_columns=cols_entry.get(),
         year_field_name=year_col_entry.get(),
         day_field_name=day_col_entry.get(),
@@ -411,6 +410,7 @@ def run_job_thread(input_file, output_file):
         end_date_str=end_date_entry.get(),
         date_mode=date_mode_var.get(),
         chunksize=100000,
+        template_path="templateFile.csv",
         debug_func=debug_log,
         progress_func=update_progress
     )
@@ -448,8 +448,8 @@ def run_job_thread(input_file, output_file):
 
 root = tk.Tk()
 root.title("ULM CSV Tool v1.0")
-root.geometry("750x520")
-root.minsize(650, 520)
+root.geometry("750x420")
+root.minsize(650, 420)
 
 debug_visible = False
 
@@ -476,56 +476,26 @@ ttk.Button(file_frame, text="Browse...", command=browse_output).grid(
 
 file_frame.columnconfigure(1, weight=1)
 
-# 2. Header Configuration
-header_frame = ttk.LabelFrame(
-    main_frame, text="Header Configuration", padding="6")
-header_frame.pack(fill=tk.X, pady=2)
-
-no_header_var = tk.BooleanVar(value=False)
-no_header_check = ttk.Checkbutton(
-    header_frame,
-    text="CSV has no header row (manually define below)",
-    variable=no_header_var,
-    command=toggle_header_mode
-)
-no_header_check.pack(anchor=tk.W, pady=1)
-
-ttk.Label(header_frame,
-          text="Manual / Defined Headers (comma-separated):").pack(anchor=tk.W, pady=(1, 1))
-custom_headers_entry = ttk.Entry(header_frame, width=70)
-custom_headers_entry.pack(fill=tk.X, pady=1)
-
-header_btn_frame = ttk.Frame(header_frame)
-header_btn_frame.pack(fill=tk.X, pady=2)
-
-inspect_btn = ttk.Button(
-    header_btn_frame, text="Inspect CSV Headers", command=load_headers)
-inspect_btn.pack(side=tk.LEFT, padx=2)
-
-header_status_label = ttk.Label(header_btn_frame, text="No file inspected.")
-header_status_label.pack(side=tk.LEFT, padx=5)
-
-# 3. Filtering Settings
+# 2. Filtering Settings
 config_frame = ttk.LabelFrame(
     main_frame, text="Filtering & Column Settings", padding="6")
 config_frame.pack(fill=tk.X, pady=2)
 
-# Column 2 absorbs all extra horizontal space as the window expands
 config_frame.columnconfigure(2, weight=1)
 
-# Columns to Keep (Spans Col 1 & 2 -> Stretches across)
+# Columns to Keep
 ttk.Label(config_frame, text="Columns to Keep:").grid(
     row=0, column=0, sticky=tk.W, pady=1)
 cols_entry = ttk.Entry(config_frame)
 cols_entry.grid(row=0, column=1, columnspan=2, padx=5, pady=1, sticky=tk.EW)
 
-# Year Column (Col 1 only -> Short)
+# Year Column
 ttk.Label(config_frame, text="Year Column:").grid(
     row=1, column=0, sticky=tk.W, pady=1)
 year_col_entry = ttk.Entry(config_frame, width=20)
 year_col_entry.grid(row=1, column=1, padx=5, pady=1, sticky=tk.W)
 
-# Day Column (Col 1 only -> Short)
+# Day Column
 ttk.Label(config_frame, text="Day Column:").grid(
     row=2, column=0, sticky=tk.W, pady=1)
 day_col_entry = ttk.Entry(config_frame, width=20)
@@ -547,18 +517,21 @@ ttk.Radiobutton(
     toggle_frame, text="DD-MM-YYYY", variable=date_mode_var, value="DD-MM-YYYY", command=update_date_labels
 ).pack(side=tk.LEFT)
 
-# Start Date (Spans Col 1 & 2 -> Stretches across)
+# Start Date
 start_label = ttk.Label(config_frame, text="Start Date:")
 start_label.grid(row=4, column=0, sticky=tk.W, pady=1)
 start_date_entry = ttk.Entry(config_frame)
-start_date_entry.grid(row=4, column=1, columnspan=2, padx=5, pady=1, sticky=tk.EW)
+start_date_entry.grid(row=4, column=1, columnspan=2,
+                      padx=5, pady=1, sticky=tk.EW)
 
-# End Date (Spans Col 1 & 2 -> Stretches across)
+# End Date
 end_label = ttk.Label(config_frame, text="End Date:")
 end_label.grid(row=5, column=0, sticky=tk.W, pady=1)
 end_date_entry = ttk.Entry(config_frame)
-end_date_entry.grid(row=5, column=1, columnspan=2, padx=5, pady=1, sticky=tk.EW)
-# 4. Action Controls
+end_date_entry.grid(row=5, column=1, columnspan=2,
+                    padx=5, pady=1, sticky=tk.EW)
+
+# 3. Action Controls
 control_frame = ttk.Frame(main_frame, padding="4")
 control_frame.pack(fill=tk.X, pady=4)
 
@@ -573,7 +546,7 @@ debug_toggle_btn.pack(side=tk.LEFT, padx=5)
 status_label = ttk.Label(control_frame, text="Status: Ready")
 status_label.pack(side=tk.LEFT, padx=10)
 
-# 5. Debug Console Frame
+# 4. Debug Console Frame
 debug_frame = ttk.LabelFrame(
     main_frame, text="Debug Console Diagnostics", padding="4")
 debug_text = tk.Text(debug_frame, wrap=tk.WORD, height=8,
