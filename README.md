@@ -35,5 +35,6 @@ Follow these steps to install the tool.
 1. after the processing is finished there should be a pop up saying the processing completed successfully click the <kbd>okay</kbd> button
 2. now open the output file with whatever program you wish and check that your filtered data is there
 > **Note:** if you kept the default it will have made the output in the input file folder with `_processed.csv` on the end of it
-### 🪛 if you ever need to update the backend.py file and you need to pack it into an exe file you need to run this command inside the folder you downloaded the repo to then pull it out of the dist folder and move it into the releases folder and then delete the dist folder and also if you do this remember to update the version numbers the first one is For MAJOR changes the second number is for minor changes and the third number is for small changes
+### 🪛 Troubleshooting:
+1. if you ever need to update the backend.py file and you need to pack it into an exe file you need to run this command inside the folder you downloaded the repo to then pull it out of the dist folder and move it into the releases folder and then delete the dist folder and also if you do this remember to update the version numbers the first one is For MAJOR changes the second number is for minor changes and the third number is for small changes
 > **Command:** pyinstaller --onefile --noconsole --name "ULMCSVTOOLV1.3.0" --icon "ULM_icon.ico" --add-data "templateFile.csv;." backend.py
